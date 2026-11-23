@@ -1,33 +1,32 @@
 package com.example.data.model
 
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Index
-import androidx.room.PrimaryKey
+import androidx.annotation.Keep
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.Exclude
+import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.ServerTimestamp
 
-@Entity(
-    tableName = "discipline_reviews",
-    foreignKeys = [
-        ForeignKey(
-            entity = UserEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["userId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
-    indices = [
-        Index(value = ["userId", "periodType", "periodKey"], unique = true)
-    ]
-)
+@Keep
+@IgnoreExtraProperties
 data class DisciplineReviewEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
-    val userId: Long,
-    val periodType: ReviewPeriod,
-    val periodKey: String,
-    val emotionState: EmotionState,
-    val psychologyNotes: String,
-    val slAdherenceRating: Int,
-    val lessonsSummary: String,
-    val nextActionPlan: String,
-    val updatedAt: Long = System.currentTimeMillis()
-)
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val periodType: String = ReviewPeriod.WEEKLY.name,
+    val periodKey: String = "",
+    val emotionState: String = EmotionState.CALM.name,
+    val psychologyNotes: String = "",
+    val slAdherenceRating: Int = 3,
+    val lessonsSummary: String = "",
+    val nextActionPlan: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    @get:Exclude
+    val periodTypeEnum: ReviewPeriod
+        get() = ReviewPeriod.entries.firstOrNull { it.name == periodType } ?: ReviewPeriod.WEEKLY
+
+    @get:Exclude
+    val emotionStateEnum: EmotionState
+        get() = EmotionState.entries.firstOrNull { it.name == emotionState } ?: EmotionState.CALM
+}

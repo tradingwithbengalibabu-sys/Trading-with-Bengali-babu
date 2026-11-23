@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -60,14 +59,13 @@ import com.example.ui.components.ResultBadge
 import com.example.ui.components.ScreenshotLightboxDialog
 import com.example.ui.components.TradeDetailDialog
 import com.example.ui.theme.LocalTradingColors
-import java.io.File
 
 @Composable
 fun JournalScreen(
     trades: List<TradeEntity>,
     onAddTrade: () -> Unit,
     onEditTrade: (TradeEntity) -> Unit,
-    onDeleteTrade: (Long) -> Unit,
+    onDeleteTrade: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val ext = LocalTradingColors.current
@@ -76,7 +74,7 @@ fun JournalScreen(
     var selectedDirection by remember { mutableStateOf<TradeDirection?>(null) }
     var selectedTimeframe by remember { mutableStateOf<Timeframe?>(null) }
     var inspectedTrade by remember { mutableStateOf<TradeEntity?>(null) }
-    var previewScreenshotPath by remember { mutableStateOf<String?>(null) }
+    var previewScreenshotData by remember { mutableStateOf<String?>(null) }
 
     val filtered = remember(trades, searchQuery, selectedResult, selectedDirection, selectedTimeframe) {
         trades.filter { t ->
@@ -86,9 +84,9 @@ fun JournalScreen(
                 t.tradeCode.contains(q, ignoreCase = true) ||
                 t.strategy.contains(q, ignoreCase = true) ||
                 t.notes.contains(q, ignoreCase = true)
-            val matchesResult = selectedResult == null || t.result == selectedResult
-            val matchesDir = selectedDirection == null || t.direction == selectedDirection
-            val matchesTf = selectedTimeframe == null || t.timeframe == selectedTimeframe
+            val matchesResult = selectedResult == null || t.resultEnum == selectedResult
+            val matchesDir = selectedDirection == null || t.directionEnum == selectedDirection
+            val matchesTf = selectedTimeframe == null || t.timeframeEnum == selectedTimeframe
             matchesSearch && matchesResult && matchesDir && matchesTf
         }
     }
@@ -220,12 +218,12 @@ fun JournalScreen(
                 inspectedTrade = null
                 onDeleteTrade(trade.id)
             },
-            onViewScreenshot = { path -> previewScreenshotPath = path }
+            onViewScreenshot = { data -> previewScreenshotData = data }
         )
     }
 
-    previewScreenshotPath?.let { path ->
-        ScreenshotLightboxDialog(path = path, onDismiss = { previewScreenshotPath = null })
+    previewScreenshotData?.let { data ->
+        ScreenshotLightboxDialog(screenshotData = data, onDismiss = { previewScreenshotData = null })
     }
 }
 
@@ -270,13 +268,13 @@ fun TradeCardItem(
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    DirectionBadge(trade.direction)
+                    DirectionBadge(trade.directionEnum)
                     Surface(
                         color = ext.electricBlue.copy(alpha = 0.12f),
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Text(
-                            text = trade.timeframe.label,
+                            text = trade.timeframeEnum.label,
                             style = MaterialTheme.typography.labelSmall,
                             color = ext.electricBlue,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -300,7 +298,7 @@ fun TradeCardItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ResultBadge(trade.result)
+                ResultBadge(trade.resultEnum)
             }
 
             Row(
@@ -323,7 +321,7 @@ fun TradeCardItem(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    if (!trade.screenshotPath.isNullOrBlank() && File(trade.screenshotPath).exists()) {
+                    if (!trade.screenshotData.isNullOrBlank()) {
                         Icon(
                             Icons.Rounded.Image,
                             contentDescription = "Has chart screenshot",

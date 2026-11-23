@@ -95,7 +95,7 @@ fun StudentDetailScreen(
                     }
                 },
                 actions = {
-                    Box(Modifier.padding(end = 12.dp)) { StatusBadge(st.status) }
+                    Box(Modifier.padding(end = 12.dp)) { StatusBadge(st.statusEnum) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
@@ -171,16 +171,17 @@ fun StudentDetailScreen(
                     }
 
                     if (studentReviews.isNotEmpty()) {
+                        val latest = studentReviews.first()
                         Card(
                             shape = MaterialTheme.shapes.medium,
                             colors = CardDefaults.cardColors(containerColor = ext.cardSurface),
                             border = BorderStroke(1.dp, ext.cardBorder)
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("Latest Self-Review (${studentReviews.first().periodType.label} • ${studentReviews.first().periodKey})", style = MaterialTheme.typography.titleSmall, color = ext.electricBlue)
-                                Text("Emotion: ${studentReviews.first().emotionState.label} • SL Rating: ${studentReviews.first().slAdherenceRating}/5", style = MaterialTheme.typography.bodySmall)
-                                if (studentReviews.first().psychologyNotes.isNotBlank()) {
-                                    Text(studentReviews.first().psychologyNotes, style = MaterialTheme.typography.bodyMedium)
+                                Text("Latest Self-Review (${latest.periodTypeEnum.label} • ${latest.periodKey})", style = MaterialTheme.typography.titleSmall, color = ext.electricBlue)
+                                Text("Emotion: ${latest.emotionStateEnum.label} • SL Rating: ${latest.slAdherenceRating}/5", style = MaterialTheme.typography.bodySmall)
+                                if (latest.psychologyNotes.isNotBlank()) {
+                                    Text(latest.psychologyNotes, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
                         }
@@ -224,11 +225,11 @@ fun StudentDetailScreen(
             trade = trade,
             canEditOrDelete = false,
             onDismiss = { inspectedTrade = null },
-            onViewScreenshot = { path -> previewScreenshotPath = path }
+            onViewScreenshot = { data -> previewScreenshotPath = data }
         )
     }
 
-    previewScreenshotPath?.let { path ->
-        ScreenshotLightboxDialog(path = path, onDismiss = { previewScreenshotPath = null })
+    previewScreenshotPath?.let { data ->
+        ScreenshotLightboxDialog(screenshotData = data, onDismiss = { previewScreenshotPath = null })
     }
 }

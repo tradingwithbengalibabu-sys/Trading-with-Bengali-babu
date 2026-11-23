@@ -32,7 +32,6 @@ object ReportExporter {
         ).joinToString(",")
 
         val sb = StringBuilder()
-        // UTF-8 BOM so Microsoft Excel opens currency & symbols cleanly
         sb.append('\uFEFF')
         sb.appendLine(header)
         trades.forEach { t ->
@@ -41,8 +40,8 @@ object ReportExporter {
                 t.userName,
                 t.tradeDateIso,
                 t.instrument,
-                t.direction.label,
-                t.timeframe.label,
+                t.directionEnum.label,
+                t.timeframeEnum.label,
                 t.entryPrice.toString(),
                 t.exitPrice.toString(),
                 t.stopLoss?.toString() ?: "",
@@ -50,7 +49,7 @@ object ReportExporter {
                 t.lotSize.toString(),
                 t.riskAmount.toString(),
                 t.actualPnl.toString(),
-                t.result.label,
+                t.resultEnum.label,
                 t.strategy,
                 t.entryReason,
                 t.exitReason,
@@ -83,8 +82,8 @@ object ReportExporter {
         trades: List<TradeEntity>
     ) {
         val pdf = PdfDocument()
-        val pageWidth = 595 // A4 width in pt
-        val pageHeight = 842 // A4 height in pt
+        val pageWidth = 595
+        val pageHeight = 842
         val margin = 32f
 
         val navyPaint = Paint().apply { color = Color.rgb(10, 22, 40) }
@@ -137,7 +136,6 @@ object ReportExporter {
         var page = pdf.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
         var canvas: Canvas = page.canvas
 
-        // Header banner
         canvas.drawRect(0f, 0f, pageWidth.toFloat(), 94f, navyPaint)
         canvas.drawRect(0f, 94f, pageWidth.toFloat(), 98f, goldPaint)
         if (logoBitmap != null) {
@@ -221,11 +219,11 @@ object ReportExporter {
             canvas.drawText(t.tradeCode.take(10), margin + 6f, y + 11f, boldBodyPaint)
             canvas.drawText(t.tradeDateIso, margin + 66f, y + 11f, bodyPaint)
             canvas.drawText(t.instrument.take(12), margin + 128f, y + 11f, boldBodyPaint)
-            canvas.drawText("${t.direction.label}/${t.timeframe.label}", margin + 204f, y + 11f, bodyPaint)
+            canvas.drawText("${t.directionEnum.label}/${t.timeframeEnum.label}", margin + 204f, y + 11f, bodyPaint)
             canvas.drawText(String.format(Locale.US, "%.2f", t.lotSize), margin + 266f, y + 11f, bodyPaint)
             val pnlPaint = if (t.actualPnl >= 0) greenPaint else redPaint
             canvas.drawText(TradingAnalytics.formatCurrency(t.actualPnl), margin + 312f, y + 11f, pnlPaint)
-            canvas.drawText(t.result.label, margin + 382f, y + 11f, bodyPaint)
+            canvas.drawText(t.resultEnum.label, margin + 382f, y + 11f, bodyPaint)
             canvas.drawText(t.strategy.take(16).ifEmpty { "-" }, margin + 440f, y + 11f, bodyPaint)
             y += 17f
             canvas.drawLine(margin, y, pageWidth - margin, y, dividerPaint)

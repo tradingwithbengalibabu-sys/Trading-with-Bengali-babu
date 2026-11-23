@@ -85,21 +85,21 @@ fun ReportsScreen(
     val ext = LocalTradingColors.current
     val isoFmt = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US) }
 
-    // For Admin: target can be Own Journal, All Students Combined, or a specific Student
+    // For Admin: target can be Own Journal (null), All Students Combined ("__ALL__"), or a specific Student UID
     // For Student: strictly locked to own trades!
-    var selectedStudentId by remember { mutableStateOf<Long?>(null) } // null = Own, -1L = All Students Combined
+    var selectedStudentId by remember { mutableStateOf<String?>(null) }
     var rangeType by remember { mutableStateOf(ReportRangeType.MONTHLY) }
     var customStartMillis by remember { mutableLongStateOf(System.currentTimeMillis() - 30L * 86_400_000L) }
     var customEndMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var pickingStartDate by remember { mutableStateOf<Boolean?>(null) }
 
     val sourceTrades = remember(currentUser, personalTrades, allPlatformTrades, students, selectedStudentId) {
-        if (currentUser.role != UserRole.ADMIN) {
+        if (currentUser.roleEnum != UserRole.ADMIN) {
             personalTrades
         } else {
             when (selectedStudentId) {
                 null -> personalTrades
-                -1L -> {
+                "__ALL__" -> {
                     val studentIds = students.map { it.id }.toSet()
                     allPlatformTrades.filter { it.userId in studentIds }
                 }
@@ -109,8 +109,8 @@ fun ReportsScreen(
     }
 
     val traderLabel = remember(currentUser, students, selectedStudentId) {
-        if (currentUser.role != UserRole.ADMIN || selectedStudentId == null) currentUser.name
-        else if (selectedStudentId == -1L) "All Registered Students"
+        if (currentUser.roleEnum != UserRole.ADMIN || selectedStudentId == null) currentUser.name
+        else if (selectedStudentId == "__ALL__") "All Registered Students"
         else students.firstOrNull { it.id == selectedStudentId }?.name ?: "Student"
     }
 
@@ -196,7 +196,7 @@ fun ReportsScreen(
                                 out.flush()
                             } ?: error("Cannot open output stream.")
                         }
-                    }.onSuccess { onShowMessage("Database backup saved.") }
+                    }.onSuccess { onShowMessage("Cloud backup saved.") }
                         .onFailure { onShowMessage("Backup save failed: ${it.message}") }
                 }.onFailure { onShowMessage(it.message ?: "Backup export failed.") }
             }
@@ -238,12 +238,12 @@ fun ReportsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Trading Reports & Exports", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            text = "Generate branded PDF and Excel-compatible CSV reports directly from verified database trades.",
+                            text = "Generate branded PDF and Excel-compatible CSV reports directly from verified cloud trades.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        if (currentUser.role == UserRole.ADMIN) {
+                        if (currentUser.roleEnum == UserRole.ADMIN) {
                             Text("Report Scope (Admin)", style = MaterialTheme.typography.labelMedium, color = ext.gold)
                             Row(
                                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -255,8 +255,8 @@ fun ReportsScreen(
                                     label = { Text("My Journal (${currentUser.name})") }
                                 )
                                 FilterChip(
-                                    selected = selectedStudentId == -1L,
-                                    onClick = { selectedStudentId = -1L },
+                                    selected = selectedStudentId == "__ALL__",
+                                    onClick = { selectedStudentId = "__ALL__" },
                                     label = { Text("All Students Combined") }
                                 )
                                 students.forEach { st ->
@@ -434,8 +434,8 @@ fun ReportsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Database Backup & Data Ownership", style = MaterialTheme.typography.titleMedium, color = ext.gold)
                         Text(
-                            text = if (currentUser.role == UserRole.ADMIN) {
-                                "Export a full encrypted-auth JSON backup of all accounts, trades, and reviews, or restore from a saved backup file."
+                            text = if (currentUser.roleEnum == UserRole.ADMIN) {
+                                "Export a full JSON backup of all accounts, trades, and reviews from Firestore, or restore from a saved backup file."
                             } else {
                                 "Export your own complete trading journal backup (JSON) at any time."
                             },
@@ -453,7 +453,7 @@ fun ReportsScreen(
                                 },
                                 modifier = Modifier.weight(1f).testTag("backup_json_button")
                             )
-                            if (currentUser.role == UserRole.ADMIN) {
+                            if (currentUser.roleEnum == UserRole.ADMIN) {
                                 OutlinedButton(
                                     onClick = { restoreBackupLauncher.launch(arrayOf("application/json", "*/*")) },
                                     modifier = Modifier.weight(1f).height(50.dp).testTag("restore_json_button")

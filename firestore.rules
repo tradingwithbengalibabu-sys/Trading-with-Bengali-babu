@@ -1,0 +1,224 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+             'email_verified' in request.auth.token &&
+             request.auth.token.email_verified == true &&
+             'email' in request.auth.token &&
+             request.auth.token.email == 'tradingwithbengalibabu@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() ||
+             (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isActiveUser() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE';
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.role in ['ADMIN', 'STUDENT'] &&
+             data.status in ['ACTIVE', 'SUSPENDED'] &&
+             data.dailyProfitGoal is number && data.dailyProfitGoal >= 0 &&
+             data.dailyMaxLossLimit is number && data.dailyMaxLossLimit >= 0 &&
+             data.maxTradesPerDay is int && data.maxTradesPerDay >= 1 && data.maxTradesPerDay <= 100 &&
+             data.maxRiskPerTrade is number && data.maxRiskPerTrade >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidStudentInvite(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.status in ['ACTIVE', 'SUSPENDED'] &&
+             data.dailyProfitGoal is number && data.dailyProfitGoal >= 0 &&
+             data.dailyMaxLossLimit is number && data.dailyMaxLossLimit >= 0 &&
+             data.maxTradesPerDay is int && data.maxTradesPerDay >= 1 && data.maxTradesPerDay <= 100 &&
+             data.maxRiskPerTrade is number && data.maxRiskPerTrade >= 0 &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTrade(data) {
+      return data.tradeCode is string && data.tradeCode.size() >= 3 && data.tradeCode.size() <= 32 &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80 &&
+             data.tradeDateMillis is int && data.tradeDateMillis > 0 &&
+             data.tradeDateIso is string && data.tradeDateIso.size() == 10 &&
+             data.instrument is string && data.instrument.size() >= 1 && data.instrument.size() <= 40 &&
+             data.direction in ['BUY', 'SELL'] &&
+             data.timeframe in ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] &&
+             data.entryPrice is number && data.entryPrice > 0 &&
+             data.exitPrice is number && data.exitPrice > 0 &&
+             (!('stopLoss' in data) || data.stopLoss == null || (data.stopLoss is number && data.stopLoss >= 0)) &&
+             (!('takeProfit' in data) || data.takeProfit == null || (data.takeProfit is number && data.takeProfit >= 0)) &&
+             data.lotSize is number && data.lotSize > 0 &&
+             data.riskAmount is number && data.riskAmount >= 0 &&
+             data.actualPnl is number &&
+             data.result in ['WIN', 'LOSS', 'BREAK_EVEN'] &&
+             data.strategy is string && data.strategy.size() <= 120 &&
+             data.entryReason is string && data.entryReason.size() <= 1000 &&
+             data.exitReason is string && data.exitReason.size() <= 1000 &&
+             data.mistakes is string && data.mistakes.size() <= 500 &&
+             data.lessonsLearned is string && data.lessonsLearned.size() <= 1000 &&
+             (!('screenshotData' in data) || data.screenshotData == null || (data.screenshotData is string && data.screenshotData.size() <= 350000)) &&
+             data.notes is string && data.notes.size() <= 1500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidDisciplineReview(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.periodType in ['DAILY', 'WEEKLY', 'MONTHLY'] &&
+             data.periodKey is string && data.periodKey.size() >= 4 && data.periodKey.size() <= 32 &&
+             data.emotionState in ['CALM', 'CONFIDENT', 'ANXIOUS', 'FOMO', 'REVENGE'] &&
+             data.psychologyNotes is string && data.psychologyNotes.size() <= 2000 &&
+             data.slAdherenceRating is int && data.slAdherenceRating >= 1 && data.slAdherenceRating <= 5 &&
+             data.lessonsSummary is string && data.lessonsSummary.size() <= 2000 &&
+             data.nextActionPlan is string && data.nextActionPlan.size() <= 2000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 1. Admin markers
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(adminUid) &&
+                       incoming().uid is string && incoming().uid == adminUid &&
+                       incoming().email is string && incoming().email.size() >= 3 && incoming().email.size() <= 120 &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().keys().hasAll(['uid', 'email', 'createdAt']) &&
+                       incoming().keys().hasOnly(['uid', 'email', 'createdAt']);
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminUid) && adminUid != request.auth.uid;
+    }
+
+    // 2. User profiles (PII protected: owner or Admin only)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isSignedIn() && isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == userId &&
+                       (
+                         isAdmin() ||
+                         (request.auth.uid == userId && incoming().role == 'STUDENT' && incoming().status == 'ACTIVE')
+                       );
+
+      allow update: if isSignedIn() && isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt'])) ||
+                         (request.auth.uid == userId &&
+                          existing().status == 'ACTIVE' &&
+                          incoming().role == existing().role &&
+                          incoming().status == existing().status &&
+                          incoming().email == existing().email &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt']))
+                       );
+
+      allow delete: if isAdmin() && isValidId(userId) && userId != request.auth.uid;
+    }
+
+    // 3. Admin-created Student Invites
+    match /student_invites/{inviteId} {
+      allow get: if isValidId(inviteId) && (
+                    isAdmin() ||
+                    (isSignedIn() && 'email_verified' in request.auth.token && request.auth.token.email_verified == true && 'email' in request.auth.token && existing().email == request.auth.token.email)
+                  );
+      allow list: if isBootstrappedAdmin() ||
+                     (isSignedIn() && 'email_verified' in request.auth.token && request.auth.token.email_verified == true && 'email' in request.auth.token && resource.data.email == request.auth.token.email);
+      allow create: if isAdmin() && isValidId(inviteId) &&
+                       incoming().keys().hasAll(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdByUid', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdByUid', 'createdAt', 'updatedAt']) &&
+                       isValidStudentInvite(incoming()) &&
+                       incoming().createdByUid == request.auth.uid;
+      allow update: if isAdmin() && isValidId(inviteId) &&
+                       isValidStudentInvite(incoming()) &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(inviteId);
+    }
+
+    // 4. Trading journal entries
+    match /trades/{tradeId} {
+      allow get: if isSignedIn() && isValidId(tradeId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn() && isValidId(tradeId) &&
+                       incoming().keys().hasAll(['tradeCode', 'userId', 'userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'notes', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['tradeCode', 'userId', 'userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'createdAt', 'updatedAt']) &&
+                       isValidTrade(incoming()) &&
+                       (isAdmin() || (incoming().userId == request.auth.uid && isActiveUser()));
+
+      allow update: if isSignedIn() && isValidId(tradeId) &&
+                       isValidTrade(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().tradeCode == existing().tradeCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isAdmin() || (existing().userId == request.auth.uid && isActiveUser())) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(tradeId) && (isAdmin() || (existing().userId == request.auth.uid && isActiveUser()));
+    }
+
+    // 5. Discipline & psychology reviews
+    match /discipline_reviews/{reviewId} {
+      allow get: if isSignedIn() && isValidId(reviewId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn() && isValidId(reviewId) &&
+                       incoming().keys().hasAll(['userId', 'periodType', 'periodKey', 'emotionState', 'psychologyNotes', 'slAdherenceRating', 'lessonsSummary', 'nextActionPlan', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'periodType', 'periodKey', 'emotionState', 'psychologyNotes', 'slAdherenceRating', 'lessonsSummary', 'nextActionPlan', 'createdAt', 'updatedAt']) &&
+                       isValidDisciplineReview(incoming()) &&
+                       (isAdmin() || (incoming().userId == request.auth.uid && isActiveUser()));
+
+      allow update: if isSignedIn() && isValidId(reviewId) &&
+                       isValidDisciplineReview(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isAdmin() || (existing().userId == request.auth.uid && isActiveUser())) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['periodType', 'periodKey', 'emotionState', 'psychologyNotes', 'slAdherenceRating', 'lessonsSummary', 'nextActionPlan', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(reviewId) && (isAdmin() || (existing().userId == request.auth.uid && isActiveUser()));
+    }
+  }
+}

@@ -6,9 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -65,16 +65,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.data.model.Timeframe
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
 import com.example.data.model.TradeResult
 import com.example.data.model.UserEntity
 import com.example.ui.components.GradientButton
+import com.example.ui.components.rememberDecodedScreenshot
 import com.example.ui.theme.LocalTradingColors
 import kotlinx.coroutines.launch
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -88,9 +87,9 @@ private val QUICK_MISTAKES = listOf("None", "FOMO", "Early Exit", "No Stop Loss"
 fun TradeEntryScreen(
     user: UserEntity,
     editingTrade: TradeEntity?,
-    onCopyScreenshot: suspend (Uri) -> String?,
+    onEncodeScreenshot: suspend (Uri) -> String?,
     onSave: (
-        existingTradeId: Long?,
+        existingTradeId: String?,
         tradeDateMillis: Long,
         tradeDateIso: String,
         instrument: String,
@@ -109,7 +108,7 @@ fun TradeEntryScreen(
         exitReason: String,
         mistakes: String,
         lessonsLearned: String,
-        screenshotPath: String?,
+        screenshotData: String?,
         notes: String
     ) -> Unit,
     onCancel: () -> Unit
@@ -126,8 +125,8 @@ fun TradeEntryScreen(
     var showDatePicker by remember { mutableStateOf(false) }
 
     var instrument by remember(editingTrade) { mutableStateOf(editingTrade?.instrument ?: "") }
-    var direction by remember(editingTrade) { mutableStateOf(editingTrade?.direction ?: TradeDirection.BUY) }
-    var timeframe by remember(editingTrade) { mutableStateOf(editingTrade?.timeframe ?: Timeframe.M15) }
+    var direction by remember(editingTrade) { mutableStateOf(editingTrade?.directionEnum ?: TradeDirection.BUY) }
+    var timeframe by remember(editingTrade) { mutableStateOf(editingTrade?.timeframeEnum ?: Timeframe.M15) }
     var entryPrice by remember(editingTrade) { mutableStateOf(editingTrade?.entryPrice?.toString() ?: "") }
     var exitPrice by remember(editingTrade) { mutableStateOf(editingTrade?.exitPrice?.toString() ?: "") }
     var stopLoss by remember(editingTrade) { mutableStateOf(editingTrade?.stopLoss?.toString() ?: "") }
@@ -135,23 +134,25 @@ fun TradeEntryScreen(
     var lotSize by remember(editingTrade) { mutableStateOf(editingTrade?.lotSize?.toString() ?: "1.0") }
     var riskAmount by remember(editingTrade) { mutableStateOf(editingTrade?.riskAmount?.toString() ?: "") }
     var actualPnl by remember(editingTrade) { mutableStateOf(editingTrade?.actualPnl?.toString() ?: "") }
-    var result by remember(editingTrade) { mutableStateOf(editingTrade?.result ?: TradeResult.WIN) }
+    var result by remember(editingTrade) { mutableStateOf(editingTrade?.resultEnum ?: TradeResult.WIN) }
     var strategy by remember(editingTrade) { mutableStateOf(editingTrade?.strategy ?: "Price Action") }
     var entryReason by remember(editingTrade) { mutableStateOf(editingTrade?.entryReason ?: "") }
     var exitReason by remember(editingTrade) { mutableStateOf(editingTrade?.exitReason ?: "") }
     var mistakes by remember(editingTrade) { mutableStateOf(editingTrade?.mistakes ?: "None") }
     var lessonsLearned by remember(editingTrade) { mutableStateOf(editingTrade?.lessonsLearned ?: "") }
-    var screenshotPath by remember(editingTrade) { mutableStateOf(editingTrade?.screenshotPath) }
+    var screenshotData by remember(editingTrade) { mutableStateOf(editingTrade?.screenshotData) }
     var notes by remember(editingTrade) { mutableStateOf(editingTrade?.notes ?: "") }
     var validationError by remember { mutableStateOf<String?>(null) }
+
+    val decodedPreview = rememberDecodedScreenshot(screenshotData)
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
             if (uri != null) {
                 scope.launch {
-                    val savedPath = onCopyScreenshot(uri)
-                    if (savedPath != null) screenshotPath = savedPath
+                    val encoded = onEncodeScreenshot(uri)
+                    if (encoded != null) screenshotData = encoded
                 }
             }
         }
@@ -213,7 +214,6 @@ fun TradeEntryScreen(
                     }
                 }
 
-                // Date Selector
                 OutlinedButton(
                     onClick = { showDatePicker = true },
                     modifier = Modifier.fillMaxWidth().height(52.dp).testTag("trade_date_button"),
@@ -224,7 +224,6 @@ fun TradeEntryScreen(
                     Text("Trade Date: ${isoFmt.format(Date(tradeDateMillis))}")
                 }
 
-                // Instrument & Quick Picks
                 OutlinedTextField(
                     value = instrument,
                     onValueChange = { instrument = it },
@@ -245,7 +244,6 @@ fun TradeEntryScreen(
                     }
                 }
 
-                // Buy / Sell Direction
                 Text("Direction", style = MaterialTheme.typography.labelLarge)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TradeDirection.entries.forEach { dir ->
@@ -259,7 +257,6 @@ fun TradeEntryScreen(
                     }
                 }
 
-                // Timeframe
                 Text("Timeframe", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -274,7 +271,6 @@ fun TradeEntryScreen(
                     }
                 }
 
-                // Prices Row
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = entryPrice,
@@ -363,7 +359,6 @@ fun TradeEntryScreen(
                     }
                 }
 
-                // Strategy
                 OutlinedTextField(
                     value = strategy,
                     onValueChange = { strategy = it },
@@ -447,7 +442,6 @@ fun TradeEntryScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Chart Screenshot Upload (Android Photo Picker - zero storage permissions)
                 Text("Chart Screenshot", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -464,18 +458,17 @@ fun TradeEntryScreen(
                     ) {
                         Icon(Icons.Rounded.Image, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(if (screenshotPath == null) "Upload Chart Screenshot" else "Replace Screenshot")
+                        Text(if (screenshotData == null) "Upload Chart Screenshot" else "Replace Screenshot")
                     }
-                    if (screenshotPath != null) {
-                        IconButton(onClick = { screenshotPath = null }) {
+                    if (screenshotData != null) {
+                        IconButton(onClick = { screenshotData = null }) {
                             Icon(Icons.Rounded.Delete, contentDescription = "Remove screenshot", tint = ext.loss)
                         }
                     }
                 }
-                val shot = screenshotPath
-                if (!shot.isNullOrBlank() && File(shot).exists()) {
-                    AsyncImage(
-                        model = File(shot),
+                if (decodedPreview != null) {
+                    Image(
+                        bitmap = decodedPreview,
                         contentDescription = "Selected chart screenshot",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -495,7 +488,7 @@ fun TradeEntryScreen(
                         val xp = exitPrice.toDoubleOrNull()
                         val ls = lotSize.toDoubleOrNull()
                         val pnl = actualPnl.toDoubleOrNull()
-                        val risk = riskAmount.toDoubleOrNull() ?: 0.0
+                        val risk = riskAmount.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
                         val sl = stopLoss.takeIf { it.isNotBlank() }?.toDoubleOrNull()
                         val tp = takeProfit.takeIf { it.isNotBlank() }?.toDoubleOrNull()
 
@@ -505,6 +498,8 @@ fun TradeEntryScreen(
                             xp == null || xp <= 0.0 -> validationError = "Please enter a valid Exit Price (> 0)."
                             ls == null || ls <= 0.0 -> validationError = "Please enter a valid Lot Size (> 0)."
                             pnl == null -> validationError = "Please enter Actual Profit / Loss (e.g., 150 or -75)."
+                            stopLoss.isNotBlank() && (sl == null || sl < 0.0) -> validationError = "Stop Loss must be >= 0."
+                            takeProfit.isNotBlank() && (tp == null || tp < 0.0) -> validationError = "Take Profit must be >= 0."
                             else -> {
                                 validationError = null
                                 onSave(
@@ -527,7 +522,7 @@ fun TradeEntryScreen(
                                     exitReason,
                                     mistakes,
                                     lessonsLearned,
-                                    screenshotPath,
+                                    screenshotData,
                                     notes
                                 )
                             }

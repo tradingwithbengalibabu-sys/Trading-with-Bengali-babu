@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.app.Activity
+import android.content.Context
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -22,34 +25,31 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.ShowChart
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,42 +57,52 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
-import com.example.ui.components.GradientButton
 import com.example.ui.theme.LocalTradingColors
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.firebase.Firebase
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun AuthScreen(
-    hasAdmin: Boolean?,
     isDarkMode: Boolean,
-    isBusy: Boolean,
-    errorMessage: String?,
     onToggleTheme: (Boolean) -> Unit,
-    onLogin: (email: String, password: String) -> Unit,
-    onRegisterStudent: (name: String, email: String, password: String) -> Unit,
-    onRegisterAdmin: (name: String, email: String, password: String) -> Unit,
-    onClearError: () -> Unit
+    onAuthSuccess: () -> Unit
 ) {
     val ext = LocalTradingColors.current
-    var selectedTab by remember(hasAdmin) {
-        mutableIntStateOf(if (hasAdmin == false) 2 else 0)
-    }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
 
-    var name by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var adminName by remember { mutableStateOf("Bangali Babu") }
-    var adminEmail by remember { mutableStateOf("tradingwithbengalibabu@gmail.com") }
-    var adminPassword by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        attemptAutoSignIn(
+            context = context,
+            credentialManager = credentialManager,
+            onAuthSuccess = onAuthSuccess,
+            onUnauthenticated = { /* Interactive Sign in with Google button stays ready */ },
+            scope = scope
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -129,11 +139,11 @@ fun AuthScreen(
             Column(
                 modifier = Modifier.widthIn(max = 460.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(116.dp)
+                        .size(124.dp)
                         .clip(CircleShape)
                         .background(Color(0xFF0A1628))
                         .border(2.5.dp, ext.gold, CircleShape),
@@ -157,6 +167,7 @@ fun AuthScreen(
                         color = ext.gold,
                         textAlign = TextAlign.Center
                     )
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = "Professional Trading Journal & Student Analytics Platform",
                         style = MaterialTheme.typography.bodyMedium,
@@ -173,39 +184,19 @@ fun AuthScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(18.dp),
+                        modifier = Modifier.padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        val tabs = if (hasAdmin == false) {
-                            listOf("Sign In", "Student Sign Up", "Admin Setup")
-                        } else {
-                            listOf("Sign In", "Student Sign Up")
-                        }
-                        if (selectedTab >= tabs.size) selectedTab = 0
-
-                        TabRow(
-                            selectedTabIndex = selectedTab,
-                            containerColor = ext.cardElevated,
-                            contentColor = ext.gold,
-                            modifier = Modifier.clip(RoundedCornerShape(12.dp))
-                        ) {
-                            tabs.forEachIndexed { idx, title ->
-                                Tab(
-                                    selected = selectedTab == idx,
-                                    onClick = {
-                                        selectedTab = idx
-                                        onClearError()
-                                    },
-                                    text = {
-                                        Text(
-                                            text = title,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            maxLines = 1
-                                        )
-                                    }
-                                )
-                            }
-                        }
+                        Text(
+                            text = "Sign In to Your Workspace",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Authenticate securely with your Google account. Admin and Student workspaces are strictly separated by server-side cloud rules.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
                         AnimatedVisibility(visible = !errorMessage.isNullOrBlank()) {
                             Surface(
@@ -223,174 +214,98 @@ fun AuthScreen(
                             }
                         }
 
-                        when (selectedTab) {
-                            0 -> {
-                                Text(
-                                    text = "Admin & Student Secure Login",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                OutlinedTextField(
-                                    value = email,
-                                    onValueChange = { email = it; onClearError() },
-                                    label = { Text("Email Address") },
-                                    leadingIcon = { Icon(Icons.Rounded.Email, contentDescription = null) },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                    modifier = Modifier.fillMaxWidth().testTag("login_email_input")
-                                )
-                                OutlinedTextField(
-                                    value = password,
-                                    onValueChange = { password = it; onClearError() },
-                                    label = { Text("Password") },
-                                    leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
-                                    trailingIcon = {
-                                        IconButton(onClick = { showPassword = !showPassword }) {
-                                            Icon(
-                                                if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                                contentDescription = "Toggle password visibility"
-                                            )
-                                        }
+                        Button(
+                            onClick = {
+                                errorMessage = null
+                                isLoading = true
+                                onGoogleSignInClicked(
+                                    context = context,
+                                    credentialManager = credentialManager,
+                                    onAuthSuccess = {
+                                        isLoading = false
+                                        onAuthSuccess()
                                     },
-                                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("login_password_input")
-                                )
-                                if (isBusy) {
-                                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator()
-                                    }
-                                } else {
-                                    GradientButton(
-                                        text = "Sign In to Platform",
-                                        onClick = { onLogin(email, password) },
-                                        colors = listOf(ext.electricBlue, ext.purple),
-                                        modifier = Modifier.fillMaxWidth().testTag("login_submit_button")
-                                    )
-                                }
-                            }
-                            1 -> {
-                                Text(
-                                    text = "Create Private Student Account",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Your trading journal is strictly isolated and private from other students.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                OutlinedTextField(
-                                    value = name,
-                                    onValueChange = { name = it; onClearError() },
-                                    label = { Text("Full Name") },
-                                    leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("register_name_input")
-                                )
-                                OutlinedTextField(
-                                    value = email,
-                                    onValueChange = { email = it; onClearError() },
-                                    label = { Text("Email Address") },
-                                    leadingIcon = { Icon(Icons.Rounded.Email, contentDescription = null) },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                    modifier = Modifier.fillMaxWidth().testTag("register_email_input")
-                                )
-                                OutlinedTextField(
-                                    value = password,
-                                    onValueChange = { password = it; onClearError() },
-                                    label = { Text("Password (min 6 chars)") },
-                                    leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
-                                    trailingIcon = {
-                                        IconButton(onClick = { showPassword = !showPassword }) {
-                                            Icon(
-                                                if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                                contentDescription = "Toggle password visibility"
-                                            )
-                                        }
+                                    onAuthError = { msg ->
+                                        isLoading = false
+                                        errorMessage = msg
                                     },
-                                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("register_password_input")
-                                )
-                                if (isBusy) {
-                                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator()
+                                    scope = scope,
+                                    onAuthCancelled = {
+                                        isLoading = false
                                     }
-                                } else {
-                                    GradientButton(
-                                        text = "Register as Student",
-                                        onClick = { onRegisterStudent(name, email, password) },
-                                        colors = listOf(ext.teal, ext.electricBlue),
-                                        modifier = Modifier.fillMaxWidth().testTag("register_submit_button")
-                                    )
-                                }
-                            }
-                            2 -> {
+                                )
+                            },
+                            enabled = !isLoading,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ext.gold,
+                                contentColor = Color(0xFF0A1628)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                                .testTag("google_sign_in_button")
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    color = Color(0xFF0A1628),
+                                    strokeWidth = 2.5.dp
+                                )
+                            } else {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(Icons.Rounded.AdminPanelSettings, contentDescription = null, tint = ext.gold)
-                                    Text(
-                                        text = "First-Time Master Admin Setup",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = ext.gold
+                                    Icon(
+                                        imageVector = Icons.Rounded.AccountCircle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(22.dp)
                                     )
-                                }
-                                Text(
-                                    text = "Initialize your Admin owner account once. You will have full control over students, monitoring, and database backups.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                OutlinedTextField(
-                                    value = adminName,
-                                    onValueChange = { adminName = it; onClearError() },
-                                    label = { Text("Admin Name") },
-                                    leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("admin_setup_name_input")
-                                )
-                                OutlinedTextField(
-                                    value = adminEmail,
-                                    onValueChange = { adminEmail = it; onClearError() },
-                                    label = { Text("Admin Email") },
-                                    leadingIcon = { Icon(Icons.Rounded.Email, contentDescription = null) },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                    modifier = Modifier.fillMaxWidth().testTag("admin_setup_email_input")
-                                )
-                                OutlinedTextField(
-                                    value = adminPassword,
-                                    onValueChange = { adminPassword = it; onClearError() },
-                                    label = { Text("Create Master Password (min 6 chars)") },
-                                    leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
-                                    trailingIcon = {
-                                        IconButton(onClick = { showPassword = !showPassword }) {
-                                            Icon(
-                                                if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                                contentDescription = "Toggle password visibility"
-                                            )
-                                        }
-                                    },
-                                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth().testTag("admin_setup_password_input")
-                                )
-                                if (isBusy) {
-                                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator()
-                                    }
-                                } else {
-                                    GradientButton(
-                                        text = "Create Admin Account",
-                                        onClick = { onRegisterAdmin(adminName, adminEmail, adminPassword) },
-                                        colors = listOf(ext.gold, Color(0xFFD97706)),
-                                        modifier = Modifier.fillMaxWidth().testTag("admin_setup_submit_button")
+                                    Text(
+                                        text = "Sign in with Google",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                                     )
                                 }
                             }
+                        }
+
+                        HorizontalDivider(color = ext.cardBorder)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AdminPanelSettings,
+                                contentDescription = null,
+                                tint = ext.gold,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Mentor / Admin account syncs full student monitoring & cloud backups.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ShowChart,
+                                contentDescription = null,
+                                tint = ext.electricBlue,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Students access their private 21-field trading journal, KPIs, and discipline analytics.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         Row(
@@ -406,14 +321,94 @@ fun AuthScreen(
                             )
                             Spacer(Modifier.size(6.dp))
                             Text(
-                                text = "Salted PBKDF2 Auth • Role-Isolated Data",
-                                style = MaterialTheme.typography.bodySmall,
+                                text = "Cloud Firestore • Google Auth • Zero-Trust Rules",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+fun attemptAutoSignIn(
+    context: Context,
+    credentialManager: CredentialManager,
+    onAuthSuccess: () -> Unit,
+    onUnauthenticated: () -> Unit,
+    scope: CoroutineScope
+) {
+    if (Firebase.auth.currentUser != null) {
+        onAuthSuccess()
+        return
+    }
+    val clientId = try {
+        context.getString(R.string.default_web_client_id)
+    } catch (_: Exception) {
+        onUnauthenticated()
+        return
+    }
+    val googleIdOption = GetGoogleIdOption.Builder()
+        .setFilterByAuthorizedAccounts(true)
+        .setServerClientId(clientId)
+        .setAutoSelectEnabled(true)
+        .build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(googleIdOption)
+        .build()
+    scope.launch {
+        try {
+            val cred = credentialManager.getCredential(context, request).credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                onAuthSuccess()
+            } else {
+                onUnauthenticated()
+            }
+        } catch (_: Exception) {
+            onUnauthenticated()
+        }
+    }
+}
+
+fun onGoogleSignInClicked(
+    context: Context,
+    credentialManager: CredentialManager,
+    onAuthSuccess: () -> Unit,
+    onAuthError: (String) -> Unit,
+    scope: CoroutineScope,
+    onAuthCancelled: () -> Unit = {}
+) {
+    val clientId = try {
+        context.getString(R.string.default_web_client_id)
+    } catch (_: Exception) {
+        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        return
+    }
+    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(signInOption)
+        .build()
+    scope.launch {
+        try {
+            val activityContext = context as? Activity ?: context
+            val cred = credentialManager.getCredential(activityContext, request).credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                onAuthSuccess()
+            } else {
+                onAuthError("Unexpected credential type received.")
+            }
+        } catch (e: GetCredentialCancellationException) {
+            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            onAuthCancelled()
+        } catch (e: Exception) {
+            Log.e("Auth", "Google Sign-In failed", e)
+            onAuthError(e.localizedMessage ?: "Sign in failed")
         }
     }
 }

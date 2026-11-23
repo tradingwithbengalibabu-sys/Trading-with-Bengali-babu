@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -39,11 +41,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -54,7 +59,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.AccountStatus
 import com.example.data.model.TradeDirection
@@ -63,8 +67,18 @@ import com.example.data.model.TradeResult
 import com.example.data.model.UserRole
 import com.example.domain.TradingAnalytics
 import com.example.ui.theme.LocalTradingColors
-import java.io.File
 import java.util.Locale
+
+@Composable
+fun rememberDecodedScreenshot(screenshotData: String?): ImageBitmap? {
+    return remember(screenshotData) {
+        if (screenshotData.isNullOrBlank()) null
+        else runCatching {
+            val bytes = Base64.decode(screenshotData, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+    }
+}
 
 @Composable
 fun BrandLogoBadge(
@@ -376,6 +390,7 @@ fun TradeDetailDialog(
         trade.actualPnl < 0 -> ext.loss
         else -> ext.gold
     }
+    val decodedBitmap = rememberDecodedScreenshot(trade.screenshotData)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -418,14 +433,14 @@ fun TradeDetailDialog(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    DirectionBadge(trade.direction)
-                    ResultBadge(trade.result)
+                    DirectionBadge(trade.directionEnum)
+                    ResultBadge(trade.resultEnum)
                     Surface(
                         color = ext.purple.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Text(
-                            text = trade.timeframe.label,
+                            text = trade.timeframeEnum.label,
                             style = MaterialTheme.typography.labelSmall,
                             color = ext.purple,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -479,8 +494,8 @@ fun TradeDetailDialog(
                 DetailTextBlock("Lessons Learned", trade.lessonsLearned)
                 DetailTextBlock("Additional Notes", trade.notes)
 
-                val shot = trade.screenshotPath
-                if (!shot.isNullOrBlank() && File(shot).exists()) {
+                val shotData = trade.screenshotData
+                if (!shotData.isNullOrBlank() && decodedBitmap != null) {
                     Text("Chart Screenshot", style = MaterialTheme.typography.labelMedium, color = ext.gold)
                     Box(
                         modifier = Modifier
@@ -488,10 +503,10 @@ fun TradeDetailDialog(
                             .height(170.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .border(1.dp, ext.cardBorder, RoundedCornerShape(12.dp))
-                            .clickable { onViewScreenshot(shot) }
+                            .clickable { onViewScreenshot(shotData) }
                     ) {
-                        AsyncImage(
-                            model = File(shot),
+                        Image(
+                            bitmap = decodedBitmap,
                             contentDescription = "Chart screenshot for ${trade.tradeCode}",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
@@ -567,7 +582,8 @@ private fun DetailTextBlock(label: String, content: String) {
 }
 
 @Composable
-fun ScreenshotLightboxDialog(path: String, onDismiss: () -> Unit) {
+fun ScreenshotLightboxDialog(screenshotData: String, onDismiss: () -> Unit) {
+    val decodedBitmap = rememberDecodedScreenshot(screenshotData)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -579,14 +595,16 @@ fun ScreenshotLightboxDialog(path: String, onDismiss: () -> Unit) {
                 .clickable { onDismiss() },
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
-                model = File(path),
-                contentDescription = "Full chart screenshot",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-            )
+            if (decodedBitmap != null) {
+                Image(
+                    bitmap = decodedBitmap,
+                    contentDescription = "Full chart screenshot",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                )
+            }
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier

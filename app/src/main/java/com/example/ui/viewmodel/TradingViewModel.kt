@@ -2,13 +2,15 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.data.local.AppDatabase
 import com.example.data.local.SessionPreferences
+import com.example.data.model.AccountStatus
 import com.example.data.model.DisciplineReviewEntity
 import com.example.data.model.EmotionState
 import com.example.data.model.ReviewPeriod
+import com.example.data.model.StudentInvite
 import com.example.data.model.Timeframe
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
@@ -20,82 +22,196 @@ import com.example.domain.DashboardMetrics
 import com.example.domain.DisciplineMetrics
 import com.example.domain.StudentPerformanceSummary
 import com.example.domain.TradingAnalytics
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Locale
+
+sealed interface UiState<out T> {
+    data object Loading : UiState<Nothing>
+    data class Success<T>(val data: T) : UiState<T>
+    data class Error(val message: String) : UiState<Nothing>
+}
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class TradingViewModel(application: Application) : AndroidViewModel(application) {
-    private val database = AppDatabase.getInstance(application)
+class TradingViewModel(
+    application: Application,
+    db: FirebaseFirestore,
+    private val uid: String
+) : ViewModel() {
+
     private val sessionPreferences = SessionPreferences(application)
-    val repository = TradingRepository(application, database, sessionPreferences)
+    val repository = TradingRepository(application, db, sessionPreferences)
 
     private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarMessage = _snackbarMessage.asSharedFlow()
 
-    private val _authError = MutableStateFlow<String?>(null)
-    val authError: StateFlow<String?> = _authError.asStateFlow()
+    private val _bootstrapError = MutableStateFlow<String?>(null)
 
-    private val _isAuthBusy = MutableStateFlow(false)
-    val isAuthBusy: StateFlow<Boolean> = _isAuthBusy.asStateFlow()
+    private val _retryTrigger = MutableStateFlow(0)
 
-    val isDarkMode: StateFlow<Boolean> = repository.isDarkMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    init {
+        bootstrapProfile()
+    }
 
-    val hasAdmin: StateFlow<Boolean?> = repository.hasAdmin
-        .map<Boolean, Boolean?> { it }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    fun retryProfileBootstrap() {
+        _bootstrapError.value = null
+        _retryTrigger.value += 1
+        bootstrapProfile()
+    }
 
-    val currentUser: StateFlow<UserEntity?> = repository.currentUser
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
-    val personalTrades: StateFlow<List<TradeEntity>> = currentUser
-        .flatMapLatest { user ->
-            if (user == null) flowOf(emptyList())
-            else repository.observeTradesForUser(user, user.id)
+    private fun bootstrapProfile() {
+        val fbUser = Firebase.auth.currentUser
+        if (fbUser == null || fbUser.uid != uid) {
+            _bootstrapError.value = "Authentication session unavailable."
+            return
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        viewModelScope.launch {
+            repository.ensureUserProfile(fbUser)
+                .onFailure { err ->
+                    _bootstrapError.value = err.message ?: "Unable to initialize user profile."
+                }
+        }
+    }
+
+    private fun extractRootFirestoreError(error: Throwable): Throwable {
+        val firestoreError = generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+        if (firestoreError == null && error is CancellationException) throw error
+        return firestoreError ?: error
+    }
+
+    val userState: StateFlow<UiState<UserEntity>> = _retryTrigger
+        .flatMapLatest {
+            repository.observeCurrentUserProfile(uid)
+                .map<UserEntity?, UiState<UserEntity>> { user ->
+                    if (user != null) UiState.Success(user) else UiState.Loading
+                }
+                .catch { error ->
+                    val root = extractRootFirestoreError(error)
+                    emit(UiState.Error(root.message ?: "Failed to load profile"))
+                }
+        }
+        .combine(_bootstrapError) { streamState, bootErr ->
+            if (streamState is UiState.Loading && !bootErr.isNullOrBlank()) {
+                UiState.Error(bootErr)
+            } else {
+                streamState
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
+
+    val currentUser: StateFlow<UserEntity?> = userState
+        .map { (it as? UiState.Success)?.data }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
+    val personalTradesState: StateFlow<UiState<List<TradeEntity>>> = currentUser
+        .flatMapLatest { user ->
+            if (user == null) {
+                flowOf(UiState.Loading)
+            } else {
+                repository.observeTradesForUser(user, user.userId.ifBlank { uid })
+                    .map<List<TradeEntity>, UiState<List<TradeEntity>>> { UiState.Success(it) }
+                    .catch { error ->
+                        val root = extractRootFirestoreError(error)
+                        emit(UiState.Error(root.message ?: "Failed to load trades"))
+                    }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
+
+    val personalTrades: StateFlow<List<TradeEntity>> = personalTradesState
+        .map { (it as? UiState.Success)?.data.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val personalMetrics: StateFlow<DashboardMetrics> = personalTrades
         .map { TradingAnalytics.calculateDashboardMetrics(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardMetrics())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), DashboardMetrics())
 
     val personalDiscipline: StateFlow<DisciplineMetrics> = combine(personalTrades, currentUser) { trades, user ->
         if (user == null) DisciplineMetrics()
         else TradingAnalytics.calculateDisciplineMetrics(trades, user)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DisciplineMetrics())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), DisciplineMetrics())
 
     val personalReviews: StateFlow<List<DisciplineReviewEntity>> = currentUser
         .flatMapLatest { user ->
-            if (user == null) flowOf(emptyList())
-            else repository.observeReviewsForUser(user, user.id)
+            if (user == null) {
+                flowOf(emptyList())
+            } else {
+                repository.observeReviewsForUser(user, user.userId.ifBlank { uid })
+                    .catch { error ->
+                        extractRootFirestoreError(error)
+                        emit(emptyList())
+                    }
+            }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     // Admin-only reactive streams
     val students: StateFlow<List<UserEntity>> = currentUser
         .flatMapLatest { user ->
-            if (user != null && user.role == UserRole.ADMIN) repository.observeStudents(user)
-            else flowOf(emptyList())
+            if (user != null && user.roleEnum == UserRole.ADMIN) {
+                repository.observeStudents(user)
+                    .catch { error ->
+                        extractRootFirestoreError(error)
+                        emit(emptyList())
+                    }
+            } else {
+                flowOf(emptyList())
+            }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    private val rawInvites: StateFlow<List<StudentInvite>> = currentUser
+        .flatMapLatest { user ->
+            if (user != null && user.roleEnum == UserRole.ADMIN) {
+                repository.observeStudentInvites(user)
+                    .catch { error ->
+                        extractRootFirestoreError(error)
+                        emit(emptyList())
+                    }
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val pendingStudentInvites: StateFlow<List<StudentInvite>> = combine(rawInvites, students) { invites, registered ->
+        val registeredEmails = registered.map { it.email.trim().lowercase(Locale.US) }.toSet()
+        invites.filter { it.email.trim().lowercase(Locale.US) !in registeredEmails }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val allPlatformTrades: StateFlow<List<TradeEntity>> = currentUser
         .flatMapLatest { user ->
-            if (user != null && user.role == UserRole.ADMIN) repository.observeAllTrades(user)
-            else flowOf(emptyList())
+            if (user != null && user.roleEnum == UserRole.ADMIN) {
+                repository.observeAllTrades(user)
+                    .catch { error ->
+                        extractRootFirestoreError(error)
+                        emit(emptyList())
+                    }
+            } else {
+                flowOf(emptyList())
+            }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val studentPerformanceSummaries: StateFlow<List<StudentPerformanceSummary>> = combine(
         students,
@@ -110,17 +226,13 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                 discipline = TradingAnalytics.calculateDisciplineMetrics(stTrades, student)
             )
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val combinedStudentsMetrics: StateFlow<DashboardMetrics> = combine(students, allPlatformTrades) { studentList, allTrades ->
         val studentIds = studentList.map { it.id }.toSet()
         val onlyStudentTrades = allTrades.filter { it.userId in studentIds }
         TradingAnalytics.calculateDashboardMetrics(onlyStudentTrades)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardMetrics())
-
-    fun clearAuthError() {
-        _authError.value = null
-    }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), DashboardMetrics())
 
     fun emitMessage(message: String) {
         _snackbarMessage.tryEmit(message)
@@ -130,47 +242,8 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { repository.setDarkMode(isDark) }
     }
 
-    fun login(email: String, password: String) {
-        viewModelScope.launch {
-            _isAuthBusy.value = true
-            _authError.value = null
-            repository.login(email, password)
-                .onFailure { _authError.value = it.message ?: "Sign in failed." }
-            _isAuthBusy.value = false
-        }
-    }
-
-    fun registerInitialAdmin(name: String, email: String, password: String) {
-        viewModelScope.launch {
-            _isAuthBusy.value = true
-            _authError.value = null
-            repository.registerInitialAdmin(name, email, password)
-                .onSuccess { emitMessage("Admin account created. Welcome, ${it.name}!") }
-                .onFailure { _authError.value = it.message ?: "Admin setup failed." }
-            _isAuthBusy.value = false
-        }
-    }
-
-    fun registerStudent(name: String, email: String, password: String) {
-        viewModelScope.launch {
-            _isAuthBusy.value = true
-            _authError.value = null
-            repository.registerStudent(name, email, password)
-                .onSuccess { emitMessage("Student account created. Welcome, ${it.name}!") }
-                .onFailure { _authError.value = it.message ?: "Registration failed." }
-            _isAuthBusy.value = false
-        }
-    }
-
-    fun logout() {
-        viewModelScope.launch {
-            repository.logout()
-            _authError.value = null
-        }
-    }
-
     fun saveTrade(
-        existingTradeId: Long?,
+        existingTradeId: String?,
         tradeDateMillis: Long,
         tradeDateIso: String,
         instrument: String,
@@ -189,7 +262,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         exitReason: String,
         mistakes: String,
         lessonsLearned: String,
-        screenshotPath: String?,
+        screenshotData: String?,
         notes: String,
         onSaved: () -> Unit
     ) {
@@ -198,7 +271,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
             repository.saveTrade(
                 actor = actor,
                 existingTradeId = existingTradeId,
-                targetUserId = actor.id,
+                targetUserId = actor.id.ifBlank { uid },
                 targetUserName = actor.name,
                 tradeDateMillis = tradeDateMillis,
                 tradeDateIso = tradeDateIso,
@@ -218,10 +291,10 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                 exitReason = exitReason,
                 mistakes = mistakes,
                 lessonsLearned = lessonsLearned,
-                screenshotPath = screenshotPath,
+                screenshotData = screenshotData,
                 notes = notes
             ).onSuccess { saved ->
-                emitMessage("${saved.tradeCode} saved successfully.")
+                emitMessage("${saved.tradeCode} saved to cloud.")
                 onSaved()
             }.onFailure { err ->
                 emitMessage(err.message ?: "Could not save trade.")
@@ -229,7 +302,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteTrade(tradeId: Long) {
+    fun deleteTrade(tradeId: String) {
         val actor = currentUser.value ?: return
         viewModelScope.launch {
             repository.deleteTrade(actor, tradeId)
@@ -238,9 +311,9 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun copyScreenshot(uri: Uri): String? {
-        return repository.copyScreenshotToAppStorage(uri)
-            .onFailure { emitMessage(it.message ?: "Failed to attach screenshot.") }
+    suspend fun encodeScreenshot(uri: Uri): String? {
+        return repository.encodeScreenshotToBase64(uri)
+            .onFailure { emitMessage(it.message ?: "Failed to process screenshot.") }
             .getOrNull()
     }
 
@@ -271,7 +344,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.saveDisciplineReview(
                 actor = actor,
-                targetUserId = actor.id,
+                targetUserId = actor.id.ifBlank { uid },
                 periodType = periodType,
                 periodKey = periodKey,
                 emotionState = emotionState,
@@ -287,11 +360,10 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // --- ADMIN STUDENT MANAGEMENT ---
-    fun createStudent(
+    // --- ADMIN STUDENT & INVITE MANAGEMENT ---
+    fun createStudentInvite(
         name: String,
         email: String,
-        password: String,
         dailyGoal: Double,
         dailyMaxLoss: Double,
         maxTradesPerDay: Int,
@@ -300,14 +372,46 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val actor = currentUser.value ?: return
         viewModelScope.launch {
-            repository.createStudentByAdmin(
-                actor, name, email, password, dailyGoal, dailyMaxLoss, maxTradesPerDay, maxRiskPerTrade
+            repository.createStudentInviteByAdmin(
+                actor, name, email, dailyGoal, dailyMaxLoss, maxTradesPerDay, maxRiskPerTrade
             ).onSuccess {
-                emitMessage("Student ${it.name} created.")
+                emitMessage("Invite created for ${it.email}.")
                 onSuccess()
             }.onFailure {
-                emitMessage(it.message ?: "Failed to create student.")
+                emitMessage(it.message ?: "Failed to create invite.")
             }
+        }
+    }
+
+    fun updateStudentInvite(
+        invite: StudentInvite,
+        newName: String,
+        newEmail: String,
+        dailyGoal: Double,
+        dailyMaxLoss: Double,
+        maxTradesPerDay: Int,
+        maxRiskPerTrade: Double,
+        onSuccess: () -> Unit
+    ) {
+        val actor = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.updateStudentInviteByAdmin(
+                actor, invite, newName, newEmail, dailyGoal, dailyMaxLoss, maxTradesPerDay, maxRiskPerTrade
+            ).onSuccess {
+                emitMessage("Student invite updated.")
+                onSuccess()
+            }.onFailure {
+                emitMessage(it.message ?: "Failed to update invite.")
+            }
+        }
+    }
+
+    fun deleteStudentInvite(inviteId: String) {
+        val actor = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.deleteStudentInviteByAdmin(actor, inviteId)
+                .onSuccess { emitMessage("Invite deleted.") }
+                .onFailure { emitMessage(it.message ?: "Delete failed.") }
         }
     }
 
@@ -315,7 +419,6 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         student: UserEntity,
         newName: String,
         newEmail: String,
-        newPassword: String?,
         dailyGoal: Double,
         dailyMaxLoss: Double,
         maxTradesPerDay: Int,
@@ -325,9 +428,9 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         val actor = currentUser.value ?: return
         viewModelScope.launch {
             repository.updateStudentByAdmin(
-                actor, student, newName, newEmail, newPassword, dailyGoal, dailyMaxLoss, maxTradesPerDay, maxRiskPerTrade
+                actor, student, newName, newEmail, dailyGoal, dailyMaxLoss, maxTradesPerDay, maxRiskPerTrade
             ).onSuccess {
-                emitMessage("Student account updated.")
+                emitMessage("Student profile updated.")
                 onSuccess()
             }.onFailure {
                 emitMessage(it.message ?: "Failed to update student.")
@@ -346,7 +449,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteStudent(studentId: Long) {
+    fun deleteStudent(studentId: String) {
         val actor = currentUser.value ?: return
         viewModelScope.launch {
             repository.deleteStudentByAdmin(actor, studentId)
@@ -355,9 +458,12 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun observeStudentReviews(studentId: Long) = currentUser.flatMapLatest { actor ->
+    fun observeStudentReviews(studentId: String): Flow<List<DisciplineReviewEntity>> = currentUser.flatMapLatest { actor ->
         if (actor == null) flowOf(emptyList())
-        else repository.observeReviewsForUser(actor, studentId)
+        else repository.observeReviewsForUser(actor, studentId).catch { error ->
+            extractRootFirestoreError(error)
+            emit(emptyList())
+        }
     }
 
     suspend fun exportBackupJson(): Result<String> {
@@ -369,8 +475,21 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         val actor = currentUser.value ?: return
         viewModelScope.launch {
             repository.restoreBackupJson(actor, json)
-                .onSuccess { count -> emitMessage("Backup restored ($count trades synced).") }
+                .onSuccess { count -> emitMessage("Cloud backup restored ($count trades synced).") }
                 .onFailure { emitMessage(it.message ?: "Backup restore failed.") }
+        }
+    }
+
+    companion object {
+        fun provideFactory(
+            application: Application,
+            db: FirebaseFirestore,
+            uid: String
+        ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return TradingViewModel(application, db, uid) as T
+            }
         }
     }
 }

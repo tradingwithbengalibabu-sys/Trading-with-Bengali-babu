@@ -117,7 +117,7 @@ fun DashboardScreen(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            RoleBadge(user.role)
+                                            RoleBadge(user.roleEnum)
                                             Text(
                                                 text = "Trading with Bangali Babu",
                                                 style = MaterialTheme.typography.bodySmall,

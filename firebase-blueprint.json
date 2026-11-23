@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Trusted marker document granting Admin access to a verified UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID of the admin user." },
+        "email": { "type": "string", "description": "Verified email address of the admin." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered Admin or Student account with discipline thresholds.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID matching document ID." },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "dailyProfitGoal": { "type": "number" },
+        "dailyMaxLossLimit": { "type": "number" },
+        "maxTradesPerDay": { "type": "integer" },
+        "maxRiskPerTrade": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "name", "email", "role", "status", "dailyProfitGoal", "dailyMaxLossLimit", "maxTradesPerDay", "maxRiskPerTrade", "createdAt", "updatedAt"]
+    },
+    "StudentInvite": {
+      "title": "StudentInvite",
+      "description": "Admin pre-provisioned student profile and discipline thresholds keyed by invite ID.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "dailyProfitGoal": { "type": "number" },
+        "dailyMaxLossLimit": { "type": "number" },
+        "maxTradesPerDay": { "type": "integer" },
+        "maxRiskPerTrade": { "type": "number" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["name", "email", "status", "dailyProfitGoal", "dailyMaxLossLimit", "maxTradesPerDay", "maxRiskPerTrade", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Trade": {
+      "title": "Trade",
+      "description": "Complete 21-field trading journal entry owned by a user.",
+      "type": "object",
+      "properties": {
+        "tradeCode": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "tradeDateMillis": { "type": "integer" },
+        "tradeDateIso": { "type": "string" },
+        "instrument": { "type": "string" },
+        "direction": { "type": "string", "enum": ["BUY", "SELL"] },
+        "timeframe": { "type": "string", "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1"] },
+        "entryPrice": { "type": "number" },
+        "exitPrice": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "takeProfit": { "type": "number" },
+        "lotSize": { "type": "number" },
+        "riskAmount": { "type": "number" },
+        "actualPnl": { "type": "number" },
+        "result": { "type": "string", "enum": ["WIN", "LOSS", "BREAK_EVEN"] },
+        "strategy": { "type": "string" },
+        "entryReason": { "type": "string" },
+        "exitReason": { "type": "string" },
+        "mistakes": { "type": "string" },
+        "lessonsLearned": { "type": "string" },
+        "screenshotData": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["tradeCode", "userId", "userName", "tradeDateMillis", "tradeDateIso", "instrument", "direction", "timeframe", "entryPrice", "exitPrice", "lotSize", "riskAmount", "actualPnl", "result", "strategy", "entryReason", "exitReason", "mistakes", "lessonsLearned", "notes", "createdAt", "updatedAt"]
+    },
+    "DisciplineReview": {
+      "title": "DisciplineReview",
+      "description": "Daily, weekly, or monthly trading psychology and self-review record.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "periodType": { "type": "string", "enum": ["DAILY", "WEEKLY", "MONTHLY"] },
+        "periodKey": { "type": "string" },
+        "emotionState": { "type": "string", "enum": ["CALM", "CONFIDENT", "ANXIOUS", "FOMO", "REVENGE"] },
+        "psychologyNotes": { "type": "string" },
+        "slAdherenceRating": { "type": "integer" },
+        "lessonsSummary": { "type": "string" },
+        "nextActionPlan": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "periodType", "periodKey", "emotionState", "psychologyNotes", "slAdherenceRating", "lessonsSummary", "nextActionPlan", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Trusted Admin UID registry."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User accounts (Admin and Student) with private PII and discipline thresholds."
+    },
+    "/student_invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/StudentInvite" },
+      "description": "Admin-managed student invitations and pre-configured risk limits."
+    },
+    "/trades/{tradeId}": {
+      "schema": { "$ref": "#/entities/Trade" },
+      "description": "Trading journal entries isolated by userId with Admin monitoring access."
+    },
+    "/discipline_reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/DisciplineReview" },
+      "description": "Trading psychology notes and periodic self-reviews isolated by userId."
+    }
+  }
+}

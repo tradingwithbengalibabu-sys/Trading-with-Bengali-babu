@@ -8,9 +8,7 @@ import com.example.data.model.UserEntity
 import com.example.data.model.UserRole
 import com.example.domain.TradingAnalytics
 import com.example.export.ReportExporter
-import com.example.security.PasswordHasher
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -19,12 +17,11 @@ class ExampleUnitTest {
     @Test
     fun analyticsCalculatesAllMetricsAccuratelyFromSavedTrades() {
         val user = UserEntity(
-            id = 1L,
+            id = "uid_1",
+            userId = "uid_1",
             name = "Trader",
             email = "trader@test.com",
-            passwordHash = "h",
-            passwordSalt = "s",
-            role = UserRole.STUDENT,
+            role = UserRole.STUDENT.name,
             dailyProfitGoal = 200.0,
             dailyMaxLossLimit = 100.0,
             maxTradesPerDay = 2,
@@ -33,15 +30,15 @@ class ExampleUnitTest {
 
         val trades = listOf(
             TradeEntity(
-                id = 1L,
+                id = "t1",
                 tradeCode = "TWBB-0001",
-                userId = 1L,
+                userId = "uid_1",
                 userName = "Trader",
                 tradeDateMillis = 1000L,
                 tradeDateIso = "2026-11-20",
                 instrument = "NIFTY 50",
-                direction = TradeDirection.BUY,
-                timeframe = Timeframe.M15,
+                direction = TradeDirection.BUY.name,
+                timeframe = Timeframe.M15.name,
                 entryPrice = 24000.0,
                 exitPrice = 24100.0,
                 stopLoss = 23950.0,
@@ -49,25 +46,25 @@ class ExampleUnitTest {
                 lotSize = 1.0,
                 riskAmount = 50.0,
                 actualPnl = 200.0,
-                result = TradeResult.WIN,
+                result = TradeResult.WIN.name,
                 strategy = "Breakout",
                 entryReason = "Support bounce",
                 exitReason = "Target hit",
                 mistakes = "None",
                 lessonsLearned = "Patience pays",
-                screenshotPath = null,
+                screenshotData = null,
                 notes = ""
             ),
             TradeEntity(
-                id = 2L,
+                id = "t2",
                 tradeCode = "TWBB-0002",
-                userId = 1L,
+                userId = "uid_1",
                 userName = "Trader",
                 tradeDateMillis = 2000L,
                 tradeDateIso = "2026-11-21",
                 instrument = "XAUUSD",
-                direction = TradeDirection.SELL,
-                timeframe = Timeframe.H1,
+                direction = TradeDirection.SELL.name,
+                timeframe = Timeframe.H1.name,
                 entryPrice = 2650.0,
                 exitPrice = 2660.0,
                 stopLoss = 2660.0,
@@ -75,25 +72,25 @@ class ExampleUnitTest {
                 lotSize = 0.5,
                 riskAmount = 50.0,
                 actualPnl = -80.0,
-                result = TradeResult.LOSS,
+                result = TradeResult.LOSS.name,
                 strategy = "Price Action",
                 entryReason = "Rejection",
                 exitReason = "SL hit",
                 mistakes = "FOMO",
                 lessonsLearned = "Wait for candle close",
-                screenshotPath = null,
+                screenshotData = null,
                 notes = ""
             ),
             TradeEntity(
-                id = 3L,
+                id = "t3",
                 tradeCode = "TWBB-0003",
-                userId = 1L,
+                userId = "uid_1",
                 userName = "Trader",
                 tradeDateMillis = 3000L,
                 tradeDateIso = "2026-11-21",
                 instrument = "XAUUSD",
-                direction = TradeDirection.BUY,
-                timeframe = Timeframe.H1,
+                direction = TradeDirection.BUY.name,
+                timeframe = Timeframe.H1.name,
                 entryPrice = 2655.0,
                 exitPrice = 2685.0,
                 stopLoss = 2645.0,
@@ -101,13 +98,13 @@ class ExampleUnitTest {
                 lotSize = 0.5,
                 riskAmount = 40.0,
                 actualPnl = 120.0,
-                result = TradeResult.WIN,
+                result = TradeResult.WIN.name,
                 strategy = "SMC",
                 entryReason = "OB tap",
                 exitReason = "TP",
                 mistakes = "None",
                 lessonsLearned = "Clean execution",
-                screenshotPath = null,
+                screenshotData = null,
                 notes = ""
             )
         )
@@ -136,19 +133,10 @@ class ExampleUnitTest {
         assertEquals(100.0, discipline.riskCompliancePercent, 0.01)
         assertTrue(discipline.mistakeCounts.any { it.first == "FOMO" && it.second == 1 })
 
-        // Verify CSV export formatting
         val csvOut = ByteArrayOutputStream()
         ReportExporter.writeCsvReport(csvOut, trades)
         val csvText = csvOut.toString(Charsets.UTF_8.name())
         assertTrue(csvText.contains("TWBB-0001"))
         assertTrue(csvText.contains("NIFTY 50"))
-    }
-
-    @Test
-    fun passwordHasherVerifiesValidAndRejectsInvalidPasswords() {
-        val salt = PasswordHasher.generateSalt()
-        val hash = PasswordHasher.hashPassword("BangaliSecret99", salt)
-        assertTrue(PasswordHasher.verifyPassword("BangaliSecret99", salt, hash))
-        assertFalse(PasswordHasher.verifyPassword("WrongPass", salt, hash))
     }
 }

@@ -101,9 +101,9 @@ object TradingAnalytics {
         if (trades.isEmpty()) return DashboardMetrics()
 
         val totalTrades = trades.size
-        val wins = trades.filter { it.result == TradeResult.WIN }
-        val losses = trades.filter { it.result == TradeResult.LOSS }
-        val breakEvens = trades.filter { it.result == TradeResult.BREAK_EVEN }
+        val wins = trades.filter { it.resultEnum == TradeResult.WIN }
+        val losses = trades.filter { it.resultEnum == TradeResult.LOSS }
+        val breakEvens = trades.filter { it.resultEnum == TradeResult.BREAK_EVEN }
 
         val winRate = (wins.size.toDouble() / totalTrades) * 100.0
         val lossRate = (losses.size.toDouble() / totalTrades) * 100.0
@@ -173,7 +173,11 @@ object TradingAnalytics {
                 )
             }
 
-        val chronological = trades.sortedWith(compareBy<TradeEntity> { it.tradeDateMillis }.thenBy { it.id })
+        val chronological = trades.sortedWith(
+            compareBy<TradeEntity> { it.tradeDateMillis }
+                .thenBy { it.createdAt?.seconds ?: 0L }
+                .thenBy { it.id }
+        )
         var running = 0.0
         val equityCurve = chronological.mapIndexed { idx, trade ->
             running += trade.actualPnl
@@ -192,7 +196,7 @@ object TradingAnalytics {
             .groupBy { it.instrument.trim().uppercase(Locale.US).ifEmpty { "OTHER" } }
             .entries
             .map { (symbol, list) ->
-                val w = list.count { it.result == TradeResult.WIN }
+                val w = list.count { it.resultEnum == TradeResult.WIN }
                 CategoryPerformance(
                     category = symbol,
                     tradeCount = list.size,
@@ -204,9 +208,9 @@ object TradingAnalytics {
             .sortedByDescending { it.netPnl }
 
         val timeframePerf = Timeframe.entries.mapNotNull { tf ->
-            val list = trades.filter { it.timeframe == tf }
+            val list = trades.filter { it.timeframeEnum == tf }
             if (list.isEmpty()) null else {
-                val w = list.count { it.result == TradeResult.WIN }
+                val w = list.count { it.resultEnum == TradeResult.WIN }
                 CategoryPerformance(
                     category = tf.label,
                     tradeCount = list.size,
@@ -244,10 +248,10 @@ object TradingAnalytics {
 
     private fun calculateStreak(chronological: List<TradeEntity>): StreakInfo {
         if (chronological.isEmpty()) return StreakInfo("0", 0, null)
-        val latest = chronological.last().result
+        val latest = chronological.last().resultEnum
         var count = 0
         for (i in chronological.indices.reversed()) {
-            if (chronological[i].result == latest) count++ else break
+            if (chronological[i].resultEnum == latest) count++ else break
         }
         val label = when (latest) {
             TradeResult.WIN -> "${count}W Streak"

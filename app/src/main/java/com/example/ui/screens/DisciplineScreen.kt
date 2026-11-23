@@ -397,8 +397,8 @@ fun DisciplineScreen(
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${rev.periodType.label} • ${rev.periodKey}", style = MaterialTheme.typography.titleSmall, color = ext.gold)
-                            Text("SL Rating: ${rev.slAdherenceRating}/5 • ${rev.emotionState.label}", style = MaterialTheme.typography.labelSmall, color = ext.electricBlue)
+                            Text("${rev.periodTypeEnum.label} • ${rev.periodKey}", style = MaterialTheme.typography.titleSmall, color = ext.gold)
+                            Text("SL Rating: ${rev.slAdherenceRating}/5 • ${rev.emotionStateEnum.label}", style = MaterialTheme.typography.labelSmall, color = ext.electricBlue)
                         }
                         if (rev.psychologyNotes.isNotBlank()) {
                             Text("Psychology: ${rev.psychologyNotes}", style = MaterialTheme.typography.bodySmall)

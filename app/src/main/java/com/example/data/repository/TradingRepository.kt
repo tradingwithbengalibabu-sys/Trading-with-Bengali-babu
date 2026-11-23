@@ -1,221 +1,440 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
-import com.example.data.local.AppDatabase
+import android.util.Base64
 import com.example.data.local.SessionPreferences
 import com.example.data.model.AccountStatus
 import com.example.data.model.DisciplineReviewEntity
 import com.example.data.model.EmotionState
 import com.example.data.model.ReviewPeriod
+import com.example.data.model.StudentInvite
 import com.example.data.model.Timeframe
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
 import com.example.data.model.TradeResult
 import com.example.data.model.UserEntity
 import com.example.data.model.UserRole
-import com.example.security.PasswordHasher
+import com.example.data.remote.OperationType
+import com.example.data.remote.handleFirestoreError
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.snapshots
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
+import java.io.ByteArrayOutputStream
 import java.util.Locale
-import java.util.UUID
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class TradingRepository(
     private val context: Context,
-    private val database: AppDatabase,
-    private val sessionPreferences: SessionPreferences
+    private val db: FirebaseFirestore,
+    private val sessionPreferences: SessionPreferences,
+    private val auth: FirebaseAuth = Firebase.auth
 ) {
-    private val userDao = database.userDao()
-    private val tradeDao = database.tradeDao()
-    private val reviewDao = database.disciplineReviewDao()
+    companion object {
+        const val BOOTSTRAP_ADMIN_EMAIL = "tradingwithbengalibabu@gmail.com"
+        private const val MAX_SCREENSHOT_BASE64_LENGTH = 320_000
+    }
 
     val isDarkMode: Flow<Boolean> = sessionPreferences.isDarkMode
-
-    val hasAdmin: Flow<Boolean> = userDao.observeCountByRole(UserRole.ADMIN)
-        .let { flow ->
-            kotlinx.coroutines.flow.flow {
-                flow.collect { count -> emit(count > 0) }
-            }
-        }
-
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val currentUser: Flow<UserEntity?> = sessionPreferences.loggedInUserId
-        .flatMapLatest { userId ->
-            if (userId == null) flowOf(null)
-            else userDao.observeUserById(userId)
-        }
 
     suspend fun setDarkMode(isDark: Boolean) {
         sessionPreferences.setDarkMode(isDark)
     }
 
-    suspend fun registerInitialAdmin(
-        name: String,
-        email: String,
-        password: String
-    ): Result<UserEntity> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cleanName = name.trim()
-            val cleanEmail = email.trim().lowercase(Locale.US)
-            require(cleanName.length >= 2) { "Admin name must be at least 2 characters." }
-            require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Please enter a valid email address." }
-            require(password.length >= 6) { "Password must be at least 6 characters." }
-            check(userDao.getCountByRole(UserRole.ADMIN) == 0) {
-                "An Admin account already exists. Please sign in instead."
+    private fun requireUserId(): String {
+        return auth.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+    }
+
+    private fun isValidDocId(id: String): Boolean {
+        return id.length in 1..128 && id.matches(Regex("^[a-zA-Z0-9_\\-]+$"))
+    }
+
+    private fun unwrapFirestoreError(error: Throwable): FirebaseFirestoreException? {
+        return generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+    }
+
+    suspend fun ensureUserProfile(firebaseUser: FirebaseUser): Result<UserEntity> {
+        val uid = firebaseUser.uid
+        val docPath = "users/$uid"
+        return try {
+            val cleanEmail = (firebaseUser.email ?: "").trim().lowercase(Locale.US)
+            require(cleanEmail.length in 3..120) { "Verified Google email address is required." }
+
+            val isAdminAccount = cleanEmail == BOOTSTRAP_ADMIN_EMAIL && firebaseUser.isEmailVerified
+            val userDocRef = db.collection("users").document(uid)
+            val existingSnap = userDocRef.get().await()
+
+            if (isAdminAccount) {
+                val adminRef = db.collection("admins").document(uid)
+                val adminSnap = adminRef.get().await()
+                if (!adminSnap.exists()) {
+                    adminRef.set(
+                        mapOf(
+                            "uid" to uid,
+                            "email" to cleanEmail,
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
             }
-            val salt = PasswordHasher.generateSalt()
-            val hash = PasswordHasher.hashPassword(password, salt)
-            val now = System.currentTimeMillis()
-            val user = UserEntity(
-                name = cleanName,
-                email = cleanEmail,
-                passwordHash = hash,
-                passwordSalt = salt,
-                role = UserRole.ADMIN,
-                status = AccountStatus.ACTIVE,
-                dailyProfitGoal = 500.0,
-                dailyMaxLossLimit = 200.0,
-                maxTradesPerDay = 6,
-                maxRiskPerTrade = 100.0,
-                createdAt = now,
-                updatedAt = now
-            )
-            val id = userDao.insertUser(user)
-            val created = user.copy(id = id)
-            sessionPreferences.setLoggedInUserId(id)
-            created
+
+            if (existingSnap.exists()) {
+                val existing = existingSnap.toObject(
+                    UserEntity::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: throw IllegalStateException("Unable to read user profile.")
+                Result.success(existing)
+            } else {
+                var initialName = (firebaseUser.displayName ?: "").trim()
+                    .ifEmpty { cleanEmail.substringBefore("@").ifEmpty { "Trader" } }
+                    .take(80)
+                var dailyGoal = if (isAdminAccount) 500.0 else 250.0
+                var dailyLoss = if (isAdminAccount) 200.0 else 100.0
+                var maxTrades = if (isAdminAccount) 6 else 5
+                var maxRisk = if (isAdminAccount) 100.0 else 50.0
+
+                if (!isAdminAccount && firebaseUser.isEmailVerified) {
+                    val invite = runCatching {
+                        db.collection("student_invites")
+                            .whereEqualTo("email", cleanEmail)
+                            .get()
+                            .await()
+                            .toObjects(
+                                StudentInvite::class.java,
+                                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                            )
+                            .firstOrNull()
+                    }.getOrNull()
+
+                    if (invite != null) {
+                        if (invite.statusEnum == AccountStatus.SUSPENDED) {
+                            throw SecurityException("Your invitation has been suspended by the Admin.")
+                        }
+                        if (invite.name.isNotBlank()) initialName = invite.name.take(80)
+                        dailyGoal = invite.dailyProfitGoal.coerceAtLeast(0.0)
+                        dailyLoss = invite.dailyMaxLossLimit.coerceAtLeast(0.0)
+                        maxTrades = invite.maxTradesPerDay.coerceIn(1, 100)
+                        maxRisk = invite.maxRiskPerTrade.coerceAtLeast(0.0)
+                    }
+                }
+
+                val role = if (isAdminAccount) UserRole.ADMIN.name else UserRole.STUDENT.name
+                val payload = mapOf(
+                    "userId" to uid,
+                    "name" to initialName,
+                    "email" to cleanEmail,
+                    "role" to role,
+                    "status" to AccountStatus.ACTIVE.name,
+                    "dailyProfitGoal" to dailyGoal,
+                    "dailyMaxLossLimit" to dailyLoss,
+                    "maxTradesPerDay" to maxTrades,
+                    "maxRiskPerTrade" to maxRisk,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                userDocRef.set(payload).await()
+                val createdSnap = userDocRef.get().await()
+                val created = createdSnap.toObject(
+                    UserEntity::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: UserEntity(
+                    id = uid,
+                    userId = uid,
+                    name = initialName,
+                    email = cleanEmail,
+                    role = role,
+                    status = AccountStatus.ACTIVE.name,
+                    dailyProfitGoal = dailyGoal,
+                    dailyMaxLossLimit = dailyLoss,
+                    maxTradesPerDay = maxTrades,
+                    maxRiskPerTrade = maxRisk
+                )
+                Result.success(created)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
         }
     }
 
-    suspend fun registerStudent(
-        name: String,
-        email: String,
-        password: String
-    ): Result<UserEntity> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cleanName = name.trim()
-            val cleanEmail = email.trim().lowercase(Locale.US)
-            require(cleanName.length >= 2) { "Full name must be at least 2 characters." }
-            require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Please enter a valid email address." }
-            require(password.length >= 6) { "Password must be at least 6 characters." }
-            require(userDao.getUserByEmail(cleanEmail) == null) {
-                "An account with this email already exists."
+    fun observeCurrentUserProfile(uid: String): Flow<UserEntity?> {
+        if (uid.isBlank() || auth.currentUser?.uid != uid) return flowOf(null)
+        val path = "users/$uid"
+        return db.collection("users").document(uid)
+            .snapshots()
+            .map { snap ->
+                if (!snap.exists()) null
+                else snap.toObject(UserEntity::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             }
-            val salt = PasswordHasher.generateSalt()
-            val hash = PasswordHasher.hashPassword(password, salt)
-            val now = System.currentTimeMillis()
-            val user = UserEntity(
-                name = cleanName,
-                email = cleanEmail,
-                passwordHash = hash,
-                passwordSalt = salt,
-                role = UserRole.STUDENT,
-                status = AccountStatus.ACTIVE,
-                createdAt = now,
-                updatedAt = now
-            )
-            val id = userDao.insertUser(user)
-            val created = user.copy(id = id)
-            sessionPreferences.setLoggedInUserId(id)
-            created
-        }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreError(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser?.uid == uid) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.GET, path)
+                }
+                throw error
+            }
     }
-
-    suspend fun login(email: String, password: String): Result<UserEntity> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cleanEmail = email.trim().lowercase(Locale.US)
-            require(cleanEmail.isNotBlank() && password.isNotBlank()) {
-                "Email and password are required."
-            }
-            val user = userDao.getUserByEmail(cleanEmail)
-                ?: throw IllegalArgumentException("Invalid email or password.")
-            val valid = PasswordHasher.verifyPassword(password, user.passwordSalt, user.passwordHash)
-            if (!valid) {
-                throw IllegalArgumentException("Invalid email or password.")
-            }
-            if (user.status == AccountStatus.SUSPENDED) {
-                throw SecurityException("This account has been suspended by the Admin.")
-            }
-            sessionPreferences.setLoggedInUserId(user.id)
-            user
-        }
-    }
-
-    suspend fun logout() {
-        sessionPreferences.setLoggedInUserId(null)
-    }
-
-    // --- ROLE-BASED ACCESS CONTROLLED QUERIES & MUTATIONS ---
 
     fun observeStudents(actor: UserEntity): Flow<List<UserEntity>> {
-        if (actor.role != UserRole.ADMIN) return emptyFlow()
-        return userDao.observeUsersByRole(UserRole.STUDENT)
+        val uid = auth.currentUser?.uid
+        if (uid.isNullOrBlank() || actor.roleEnum != UserRole.ADMIN) return flowOf(emptyList())
+        val path = "users"
+        return db.collection(path)
+            .whereEqualTo("role", UserRole.STUDENT.name)
+            .snapshots()
+            .map { snap ->
+                snap.toObjects(UserEntity::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.name.lowercase(Locale.US) }
+            }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreError(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser?.uid == uid) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
     }
 
-    fun observeTradesForUser(actor: UserEntity, targetUserId: Long): Flow<List<TradeEntity>> {
-        if (actor.role != UserRole.ADMIN && actor.id != targetUserId) {
-            return emptyFlow()
+    fun observeStudentInvites(actor: UserEntity): Flow<List<StudentInvite>> {
+        val uid = auth.currentUser?.uid
+        if (uid.isNullOrBlank() || actor.roleEnum != UserRole.ADMIN) return flowOf(emptyList())
+        val path = "student_invites"
+        return db.collection(path)
+            .snapshots()
+            .map { snap ->
+                snap.toObjects(StudentInvite::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.name.lowercase(Locale.US) }
+            }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreError(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser?.uid == uid) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    fun observeTradesForUser(actor: UserEntity, targetUserId: String): Flow<List<TradeEntity>> = flow {
+        val uid = requireUserId()
+        if (actor.roleEnum != UserRole.ADMIN && uid != targetUserId) {
+            emit(emptyList())
+            return@flow
         }
-        return tradeDao.observeTradesByUser(targetUserId)
+        val path = "trades"
+        emitAll(
+            db.collection(path)
+                .whereEqualTo("userId", targetUserId)
+                .snapshots()
+                .map { snap ->
+                    snap.toObjects(TradeEntity::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedWith(
+                            compareByDescending<TradeEntity> { it.tradeDateMillis }
+                                .thenByDescending { it.createdAt?.seconds ?: 0L }
+                        )
+                }
+                .catch { error ->
+                    val firestoreError = unwrapFirestoreError(error)
+                    if (firestoreError == null && error is CancellationException) throw error
+                    if (auth.currentUser?.uid == uid) {
+                        handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                    }
+                    throw error
+                }
+        )
     }
 
     fun observeAllTrades(actor: UserEntity): Flow<List<TradeEntity>> {
-        if (actor.role != UserRole.ADMIN) return emptyFlow()
-        return tradeDao.observeAllTrades()
+        val uid = auth.currentUser?.uid
+        if (uid.isNullOrBlank() || actor.roleEnum != UserRole.ADMIN) return flowOf(emptyList())
+        val path = "trades"
+        return db.collection(path)
+            .snapshots()
+            .map { snap ->
+                snap.toObjects(TradeEntity::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedWith(
+                        compareByDescending<TradeEntity> { it.tradeDateMillis }
+                            .thenByDescending { it.createdAt?.seconds ?: 0L }
+                    )
+            }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreError(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser?.uid == uid) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
     }
 
-    fun observeReviewsForUser(actor: UserEntity, targetUserId: Long): Flow<List<DisciplineReviewEntity>> {
-        if (actor.role != UserRole.ADMIN && actor.id != targetUserId) {
-            return emptyFlow()
+    fun observeReviewsForUser(actor: UserEntity, targetUserId: String): Flow<List<DisciplineReviewEntity>> = flow {
+        val uid = requireUserId()
+        if (actor.roleEnum != UserRole.ADMIN && uid != targetUserId) {
+            emit(emptyList())
+            return@flow
         }
-        return reviewDao.observeReviewsByUser(targetUserId)
+        val path = "discipline_reviews"
+        emitAll(
+            db.collection(path)
+                .whereEqualTo("userId", targetUserId)
+                .snapshots()
+                .map { snap ->
+                    snap.toObjects(DisciplineReviewEntity::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedByDescending { it.updatedAt?.seconds ?: 0L }
+                }
+                .catch { error ->
+                    val firestoreError = unwrapFirestoreError(error)
+                    if (firestoreError == null && error is CancellationException) throw error
+                    if (auth.currentUser?.uid == uid) {
+                        handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                    }
+                    throw error
+                }
+        )
     }
 
-    suspend fun createStudentByAdmin(
+    // --- ADMIN STUDENT INVITE & ACCOUNT MANAGEMENT ---
+
+    suspend fun createStudentInviteByAdmin(
         actor: UserEntity,
         name: String,
         email: String,
-        password: String,
         dailyGoal: Double,
         dailyMaxLoss: Double,
         maxTradesPerDay: Int,
         maxRiskPerTrade: Double
-    ): Result<UserEntity> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
-            val cleanName = name.trim()
-            val cleanEmail = email.trim().lowercase(Locale.US)
+    ): Result<StudentInvite> {
+        var docPath = "student_invites"
+        return try {
+            val uid = requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            val cleanName = name.trim().take(80)
+            val cleanEmail = email.trim().lowercase(Locale.US).take(120)
             require(cleanName.length >= 2) { "Student name must be at least 2 characters." }
-            require(cleanEmail.contains("@")) { "Valid email required." }
-            require(password.length >= 6) { "Temporary password must be at least 6 characters." }
-            require(userDao.getUserByEmail(cleanEmail) == null) { "Email is already registered." }
+            require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Valid Google email required." }
 
-            val salt = PasswordHasher.generateSalt()
-            val hash = PasswordHasher.hashPassword(password, salt)
-            val now = System.currentTimeMillis()
-            val student = UserEntity(
-                name = cleanName,
-                email = cleanEmail,
-                passwordHash = hash,
-                passwordSalt = salt,
-                role = UserRole.STUDENT,
-                status = AccountStatus.ACTIVE,
-                dailyProfitGoal = dailyGoal.coerceAtLeast(0.0),
-                dailyMaxLossLimit = dailyMaxLoss.coerceAtLeast(0.0),
-                maxTradesPerDay = maxTradesPerDay.coerceIn(1, 100),
-                maxRiskPerTrade = maxRiskPerTrade.coerceAtLeast(0.0),
-                createdAt = now,
-                updatedAt = now
+            val dupUser = db.collection("users").whereEqualTo("email", cleanEmail).get().await()
+            require(dupUser.isEmpty) { "A student with this email is already registered." }
+            val dupInvite = db.collection("student_invites").whereEqualTo("email", cleanEmail).get().await()
+            require(dupInvite.isEmpty) { "An invite for this email already exists." }
+
+            val docRef = db.collection("student_invites").document()
+            docPath = docRef.path
+            val payload = mapOf(
+                "name" to cleanName,
+                "email" to cleanEmail,
+                "status" to AccountStatus.ACTIVE.name,
+                "dailyProfitGoal" to dailyGoal.coerceAtLeast(0.0),
+                "dailyMaxLossLimit" to dailyMaxLoss.coerceAtLeast(0.0),
+                "maxTradesPerDay" to maxTradesPerDay.coerceIn(1, 100),
+                "maxRiskPerTrade" to maxRiskPerTrade.coerceAtLeast(0.0),
+                "createdByUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
             )
-            val id = userDao.insertUser(student)
-            student.copy(id = id)
+            docRef.set(payload).await()
+            Result.success(
+                StudentInvite(
+                    id = docRef.id,
+                    name = cleanName,
+                    email = cleanEmail,
+                    status = AccountStatus.ACTIVE.name,
+                    dailyProfitGoal = dailyGoal.coerceAtLeast(0.0),
+                    dailyMaxLossLimit = dailyMaxLoss.coerceAtLeast(0.0),
+                    maxTradesPerDay = maxTradesPerDay.coerceIn(1, 100),
+                    maxRiskPerTrade = maxRiskPerTrade.coerceAtLeast(0.0),
+                    createdByUid = uid
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateStudentInviteByAdmin(
+        actor: UserEntity,
+        invite: StudentInvite,
+        newName: String,
+        newEmail: String,
+        dailyGoal: Double,
+        dailyMaxLoss: Double,
+        maxTradesPerDay: Int,
+        maxRiskPerTrade: Double
+    ): Result<Unit> {
+        val docPath = "student_invites/${invite.id}"
+        return try {
+            requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            require(invite.id.isNotBlank()) { "Invalid invite ID." }
+            val cleanName = newName.trim().take(80)
+            val cleanEmail = newEmail.trim().lowercase(Locale.US).take(120)
+            require(cleanName.length >= 2) { "Name must be at least 2 characters." }
+            require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Valid email required." }
+
+            db.collection("student_invites").document(invite.id).update(
+                mapOf(
+                    "name" to cleanName,
+                    "email" to cleanEmail,
+                    "dailyProfitGoal" to dailyGoal.coerceAtLeast(0.0),
+                    "dailyMaxLossLimit" to dailyMaxLoss.coerceAtLeast(0.0),
+                    "maxTradesPerDay" to maxTradesPerDay.coerceIn(1, 100),
+                    "maxRiskPerTrade" to maxRiskPerTrade.coerceAtLeast(0.0),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteStudentInviteByAdmin(actor: UserEntity, inviteId: String): Result<Unit> {
+        val docPath = "student_invites/$inviteId"
+        return try {
+            requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            require(inviteId.isNotBlank()) { "Invalid invite ID." }
+            db.collection("student_invites").document(inviteId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
+            Result.failure(e)
         }
     }
 
@@ -224,46 +443,40 @@ class TradingRepository(
         student: UserEntity,
         newName: String,
         newEmail: String,
-        newPassword: String?,
         dailyGoal: Double,
         dailyMaxLoss: Double,
         maxTradesPerDay: Int,
         maxRiskPerTrade: Double
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
-            if (student.role != UserRole.STUDENT) throw SecurityException("Cannot modify non-student here.")
-            val cleanName = newName.trim()
-            val cleanEmail = newEmail.trim().lowercase(Locale.US)
+    ): Result<Unit> {
+        val docPath = "users/${student.id}"
+        return try {
+            requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            if (student.roleEnum != UserRole.STUDENT) throw SecurityException("Cannot modify non-student here.")
+            require(student.id.isNotBlank()) { "Invalid student ID." }
+
+            val cleanName = newName.trim().take(80)
+            val cleanEmail = newEmail.trim().lowercase(Locale.US).take(120)
             require(cleanName.length >= 2) { "Name must be at least 2 characters." }
-            require(cleanEmail.contains("@")) { "Valid email required." }
+            require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Valid email required." }
 
-            val existingWithEmail = userDao.getUserByEmail(cleanEmail)
-            if (existingWithEmail != null && existingWithEmail.id != student.id) {
-                throw IllegalArgumentException("Another user already uses this email.")
-            }
-
-            var updatedSalt = student.passwordSalt
-            var updatedHash = student.passwordHash
-            if (!newPassword.isNullOrBlank()) {
-                require(newPassword.length >= 6) { "New password must be at least 6 characters." }
-                updatedSalt = PasswordHasher.generateSalt()
-                updatedHash = PasswordHasher.hashPassword(newPassword, updatedSalt)
-            }
-
-            userDao.updateUser(
-                student.copy(
-                    name = cleanName,
-                    email = cleanEmail,
-                    passwordSalt = updatedSalt,
-                    passwordHash = updatedHash,
-                    dailyProfitGoal = dailyGoal.coerceAtLeast(0.0),
-                    dailyMaxLossLimit = dailyMaxLoss.coerceAtLeast(0.0),
-                    maxTradesPerDay = maxTradesPerDay.coerceIn(1, 100),
-                    maxRiskPerTrade = maxRiskPerTrade.coerceAtLeast(0.0),
-                    updatedAt = System.currentTimeMillis()
+            db.collection("users").document(student.id).update(
+                mapOf(
+                    "name" to cleanName,
+                    "email" to cleanEmail,
+                    "dailyProfitGoal" to dailyGoal.coerceAtLeast(0.0),
+                    "dailyMaxLossLimit" to dailyMaxLoss.coerceAtLeast(0.0),
+                    "maxTradesPerDay" to maxTradesPerDay.coerceIn(1, 100),
+                    "maxRiskPerTrade" to maxRiskPerTrade.coerceAtLeast(0.0),
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
         }
     }
 
@@ -271,25 +484,54 @@ class TradingRepository(
         actor: UserEntity,
         student: UserEntity,
         suspended: Boolean
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
-            if (student.role != UserRole.STUDENT) throw SecurityException("Cannot suspend Admin account.")
-            userDao.updateUser(
-                student.copy(
-                    status = if (suspended) AccountStatus.SUSPENDED else AccountStatus.ACTIVE,
-                    updatedAt = System.currentTimeMillis()
+    ): Result<Unit> {
+        val docPath = "users/${student.id}"
+        return try {
+            requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            if (student.roleEnum != UserRole.STUDENT) throw SecurityException("Cannot suspend Admin account.")
+            require(student.id.isNotBlank()) { "Invalid student ID." }
+
+            db.collection("users").document(student.id).update(
+                mapOf(
+                    "status" to if (suspended) AccountStatus.SUSPENDED.name else AccountStatus.ACTIVE.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
         }
     }
 
-    suspend fun deleteStudentByAdmin(actor: UserEntity, studentId: Long): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
-            val target = userDao.getUserById(studentId) ?: throw IllegalArgumentException("Student not found.")
-            if (target.role == UserRole.ADMIN) throw SecurityException("Cannot delete Admin account.")
-            userDao.deleteUserById(studentId)
+    suspend fun deleteStudentByAdmin(actor: UserEntity, studentId: String): Result<Unit> {
+        val docPath = "users/$studentId"
+        return try {
+            val uid = requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) throw SecurityException("Admin privileges required.")
+            require(studentId.isNotBlank() && studentId != uid) { "Cannot delete Admin account." }
+
+            val targetSnap = db.collection("users").document(studentId).get().await()
+            val target = targetSnap.toObject(UserEntity::class.java)
+            if (target?.roleEnum == UserRole.ADMIN) throw SecurityException("Cannot delete Admin account.")
+
+            val studentTrades = db.collection("trades").whereEqualTo("userId", studentId).get().await()
+            val studentReviews = db.collection("discipline_reviews").whereEqualTo("userId", studentId).get().await()
+
+            val batch = db.batch()
+            studentTrades.documents.forEach { batch.delete(it.reference) }
+            studentReviews.documents.forEach { batch.delete(it.reference) }
+            batch.delete(db.collection("users").document(studentId))
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
+            Result.failure(e)
         }
     }
 
@@ -299,25 +541,37 @@ class TradingRepository(
         dailyMaxLoss: Double,
         maxTradesPerDay: Int,
         maxRiskPerTrade: Double
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val fresh = userDao.getUserById(actor.id) ?: throw IllegalStateException("User not found.")
-            userDao.updateUser(
-                fresh.copy(
-                    dailyProfitGoal = dailyGoal.coerceAtLeast(0.0),
-                    dailyMaxLossLimit = dailyMaxLoss.coerceAtLeast(0.0),
-                    maxTradesPerDay = maxTradesPerDay.coerceIn(1, 100),
-                    maxRiskPerTrade = maxRiskPerTrade.coerceAtLeast(0.0),
-                    updatedAt = System.currentTimeMillis()
+    ): Result<Unit> {
+        var docPath = "users/${auth.currentUser?.uid ?: "unauthenticated"}"
+        return try {
+            val uid = requireUserId()
+            if (actor.statusEnum == AccountStatus.SUSPENDED) {
+                throw SecurityException("Suspended accounts cannot modify settings.")
+            }
+            val ref = db.collection("users").document(uid)
+            docPath = ref.path
+            ref.update(
+                mapOf(
+                    "dailyProfitGoal" to dailyGoal.coerceAtLeast(0.0),
+                    "dailyMaxLossLimit" to dailyMaxLoss.coerceAtLeast(0.0),
+                    "maxTradesPerDay" to maxTradesPerDay.coerceIn(1, 100),
+                    "maxRiskPerTrade" to maxRiskPerTrade.coerceAtLeast(0.0),
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
         }
     }
 
     suspend fun saveTrade(
         actor: UserEntity,
-        existingTradeId: Long?,
-        targetUserId: Long,
+        existingTradeId: String?,
+        targetUserId: String,
         targetUserName: String,
         tradeDateMillis: Long,
         tradeDateIso: String,
@@ -337,103 +591,207 @@ class TradingRepository(
         exitReason: String,
         mistakes: String,
         lessonsLearned: String,
-        screenshotPath: String?,
+        screenshotData: String?,
         notes: String
-    ): Result<TradeEntity> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.status == AccountStatus.SUSPENDED) {
+    ): Result<TradeEntity> {
+        var docPath = "trades"
+        return try {
+            val uid = requireUserId()
+            if (actor.statusEnum == AccountStatus.SUSPENDED) {
                 throw SecurityException("Suspended accounts cannot add or modify trades.")
             }
-            if (actor.role != UserRole.ADMIN && actor.id != targetUserId) {
+            if (actor.roleEnum != UserRole.ADMIN && uid != targetUserId) {
                 throw SecurityException("Access denied: You can only manage your own trades.")
             }
-            require(instrument.isNotBlank()) { "Trading instrument is required." }
+
+            val cleanInstrument = instrument.trim().uppercase(Locale.US).take(40)
+            require(cleanInstrument.isNotEmpty()) { "Trading instrument is required." }
+            require(tradeDateMillis > 0L) { "Valid trade date is required." }
+            require(tradeDateIso.length == 10) { "Invalid trade date format." }
             require(entryPrice > 0.0) { "Entry price must be greater than 0." }
             require(exitPrice > 0.0) { "Exit price must be greater than 0." }
             require(lotSize > 0.0) { "Lot size must be greater than 0." }
+            if (stopLoss != null) require(stopLoss >= 0.0) { "Stop loss cannot be negative." }
+            if (takeProfit != null) require(takeProfit >= 0.0) { "Take profit cannot be negative." }
+            if (screenshotData != null) {
+                require(screenshotData.length <= MAX_SCREENSHOT_BASE64_LENGTH) {
+                    "Screenshot image is too large. Please select a smaller chart image."
+                }
+            }
 
-            val now = System.currentTimeMillis()
-            if (existingTradeId != null && existingTradeId > 0L) {
-                val existing = tradeDao.getTradeById(existingTradeId)
+            val cleanRisk = riskAmount.coerceAtLeast(0.0)
+            val cleanUserName = targetUserName.trim().ifEmpty { actor.name }.take(80)
+            val cleanStrategy = strategy.trim().take(120)
+            val cleanEntryReason = entryReason.trim().take(1000)
+            val cleanExitReason = exitReason.trim().take(1000)
+            val cleanMistakes = mistakes.trim().take(500)
+            val cleanLessons = lessonsLearned.trim().take(1000)
+            val cleanNotes = notes.trim().take(1500)
+
+            if (!existingTradeId.isNullOrBlank()) {
+                val docRef = db.collection("trades").document(existingTradeId)
+                docPath = docRef.path
+                val snap = docRef.get().await()
+                val existing = snap.toObject(TradeEntity::class.java)
                     ?: throw IllegalArgumentException("Trade not found.")
-                if (actor.role != UserRole.ADMIN && existing.userId != actor.id) {
+                if (actor.roleEnum != UserRole.ADMIN && existing.userId != uid) {
                     throw SecurityException("Access denied: Cannot edit another student's trade.")
                 }
-                val updated = existing.copy(
-                    userName = targetUserName.trim().ifEmpty { existing.userName },
-                    tradeDateMillis = tradeDateMillis,
-                    tradeDateIso = tradeDateIso,
-                    instrument = instrument.trim().uppercase(Locale.US),
-                    direction = direction,
-                    timeframe = timeframe,
-                    entryPrice = entryPrice,
-                    exitPrice = exitPrice,
-                    stopLoss = stopLoss,
-                    takeProfit = takeProfit,
-                    lotSize = lotSize,
-                    riskAmount = riskAmount,
-                    actualPnl = actualPnl,
-                    result = result,
-                    strategy = strategy.trim(),
-                    entryReason = entryReason.trim(),
-                    exitReason = exitReason.trim(),
-                    mistakes = mistakes.trim(),
-                    lessonsLearned = lessonsLearned.trim(),
-                    screenshotPath = screenshotPath,
-                    notes = notes.trim(),
-                    updatedAt = now
+
+                // Partial update: preserves tradeCode, userId, and createdAt immutability
+                val updates = hashMapOf<String, Any?>(
+                    "userName" to cleanUserName,
+                    "tradeDateMillis" to tradeDateMillis,
+                    "tradeDateIso" to tradeDateIso,
+                    "instrument" to cleanInstrument,
+                    "direction" to direction.name,
+                    "timeframe" to timeframe.name,
+                    "entryPrice" to entryPrice,
+                    "exitPrice" to exitPrice,
+                    "stopLoss" to stopLoss,
+                    "takeProfit" to takeProfit,
+                    "lotSize" to lotSize,
+                    "riskAmount" to cleanRisk,
+                    "actualPnl" to actualPnl,
+                    "result" to result.name,
+                    "strategy" to cleanStrategy,
+                    "entryReason" to cleanEntryReason,
+                    "exitReason" to cleanExitReason,
+                    "mistakes" to cleanMistakes,
+                    "lessonsLearned" to cleanLessons,
+                    "screenshotData" to screenshotData,
+                    "notes" to cleanNotes,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-                tradeDao.updateTrade(updated)
-                updated
+                docRef.update(updates).await()
+                Result.success(
+                    existing.copy(
+                        userName = cleanUserName,
+                        tradeDateMillis = tradeDateMillis,
+                        tradeDateIso = tradeDateIso,
+                        instrument = cleanInstrument,
+                        direction = direction.name,
+                        timeframe = timeframe.name,
+                        entryPrice = entryPrice,
+                        exitPrice = exitPrice,
+                        stopLoss = stopLoss,
+                        takeProfit = takeProfit,
+                        lotSize = lotSize,
+                        riskAmount = cleanRisk,
+                        actualPnl = actualPnl,
+                        result = result.name,
+                        strategy = cleanStrategy,
+                        entryReason = cleanEntryReason,
+                        exitReason = cleanExitReason,
+                        mistakes = cleanMistakes,
+                        lessonsLearned = cleanLessons,
+                        screenshotData = screenshotData,
+                        notes = cleanNotes
+                    )
+                )
             } else {
-                val nextSeq = tradeDao.getMaxTradeId() + 1L
-                val code = "TWBB-${String.format(Locale.US, "%04d", nextSeq)}"
-                val newTrade = TradeEntity(
-                    tradeCode = code,
-                    userId = targetUserId,
-                    userName = targetUserName.trim(),
-                    tradeDateMillis = tradeDateMillis,
-                    tradeDateIso = tradeDateIso,
-                    instrument = instrument.trim().uppercase(Locale.US),
-                    direction = direction,
-                    timeframe = timeframe,
-                    entryPrice = entryPrice,
-                    exitPrice = exitPrice,
-                    stopLoss = stopLoss,
-                    takeProfit = takeProfit,
-                    lotSize = lotSize,
-                    riskAmount = riskAmount,
-                    actualPnl = actualPnl,
-                    result = result,
-                    strategy = strategy.trim(),
-                    entryReason = entryReason.trim(),
-                    exitReason = exitReason.trim(),
-                    mistakes = mistakes.trim(),
-                    lessonsLearned = lessonsLearned.trim(),
-                    screenshotPath = screenshotPath,
-                    notes = notes.trim(),
-                    createdAt = now,
-                    updatedAt = now
+                val docRef = db.collection("trades").document()
+                docPath = docRef.path
+                val suffix = docRef.id.take(4).uppercase(Locale.US)
+                val code = "TWBB-$suffix"
+                val createMap = mapOf(
+                    "tradeCode" to code,
+                    "userId" to targetUserId,
+                    "userName" to cleanUserName,
+                    "tradeDateMillis" to tradeDateMillis,
+                    "tradeDateIso" to tradeDateIso,
+                    "instrument" to cleanInstrument,
+                    "direction" to direction.name,
+                    "timeframe" to timeframe.name,
+                    "entryPrice" to entryPrice,
+                    "exitPrice" to exitPrice,
+                    "stopLoss" to stopLoss,
+                    "takeProfit" to takeProfit,
+                    "lotSize" to lotSize,
+                    "riskAmount" to cleanRisk,
+                    "actualPnl" to actualPnl,
+                    "result" to result.name,
+                    "strategy" to cleanStrategy,
+                    "entryReason" to cleanEntryReason,
+                    "exitReason" to cleanExitReason,
+                    "mistakes" to cleanMistakes,
+                    "lessonsLearned" to cleanLessons,
+                    "screenshotData" to screenshotData,
+                    "notes" to cleanNotes,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ).filterValues { it != null }
+
+                docRef.set(createMap).await()
+                Result.success(
+                    TradeEntity(
+                        id = docRef.id,
+                        tradeCode = code,
+                        userId = targetUserId,
+                        userName = cleanUserName,
+                        tradeDateMillis = tradeDateMillis,
+                        tradeDateIso = tradeDateIso,
+                        instrument = cleanInstrument,
+                        direction = direction.name,
+                        timeframe = timeframe.name,
+                        entryPrice = entryPrice,
+                        exitPrice = exitPrice,
+                        stopLoss = stopLoss,
+                        takeProfit = takeProfit,
+                        lotSize = lotSize,
+                        riskAmount = cleanRisk,
+                        actualPnl = actualPnl,
+                        result = result.name,
+                        strategy = cleanStrategy,
+                        entryReason = cleanEntryReason,
+                        exitReason = cleanExitReason,
+                        mistakes = cleanMistakes,
+                        lessonsLearned = cleanLessons,
+                        screenshotData = screenshotData,
+                        notes = cleanNotes
+                    )
                 )
-                val id = tradeDao.insertTrade(newTrade)
-                newTrade.copy(id = id)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(
+                e,
+                if (existingTradeId.isNullOrBlank()) OperationType.CREATE else OperationType.UPDATE,
+                docPath
+            )
+            Result.failure(e)
         }
     }
 
-    suspend fun deleteTrade(actor: UserEntity, tradeId: Long): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val trade = tradeDao.getTradeById(tradeId) ?: throw IllegalArgumentException("Trade not found.")
-            if (actor.role != UserRole.ADMIN && trade.userId != actor.id) {
+    suspend fun deleteTrade(actor: UserEntity, tradeId: String): Result<Unit> {
+        val docPath = "trades/$tradeId"
+        return try {
+            val uid = requireUserId()
+            if (actor.statusEnum == AccountStatus.SUSPENDED) {
+                throw SecurityException("Suspended accounts cannot delete trades.")
+            }
+            require(tradeId.isNotBlank()) { "Trade ID is required." }
+            val ref = db.collection("trades").document(tradeId)
+            val snap = ref.get().await()
+            val trade = snap.toObject(TradeEntity::class.java)
+                ?: throw IllegalArgumentException("Trade not found.")
+            if (actor.roleEnum != UserRole.ADMIN && trade.userId != uid) {
                 throw SecurityException("Access denied: Cannot delete another student's trade.")
             }
-            tradeDao.deleteTradeById(tradeId)
+            ref.delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
+            Result.failure(e)
         }
     }
 
     suspend fun saveDisciplineReview(
         actor: UserEntity,
-        targetUserId: Long,
+        targetUserId: String,
         periodType: ReviewPeriod,
         periodKey: String,
         emotionState: EmotionState,
@@ -441,80 +799,157 @@ class TradingRepository(
         slAdherenceRating: Int,
         lessonsSummary: String,
         nextActionPlan: String
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN && actor.id != targetUserId) {
+    ): Result<Unit> {
+        var docPath = "discipline_reviews"
+        return try {
+            val uid = requireUserId()
+            if (actor.statusEnum == AccountStatus.SUSPENDED) {
+                throw SecurityException("Suspended accounts cannot save reviews.")
+            }
+            if (actor.roleEnum != UserRole.ADMIN && uid != targetUserId) {
                 throw SecurityException("Access denied.")
             }
-            require(periodKey.isNotBlank()) { "Period key is required." }
-            reviewDao.upsertReview(
-                DisciplineReviewEntity(
-                    userId = targetUserId,
-                    periodType = periodType,
-                    periodKey = periodKey.trim(),
-                    emotionState = emotionState,
-                    psychologyNotes = psychologyNotes.trim(),
-                    slAdherenceRating = slAdherenceRating.coerceIn(1, 5),
-                    lessonsSummary = lessonsSummary.trim(),
-                    nextActionPlan = nextActionPlan.trim(),
-                    updatedAt = System.currentTimeMillis()
+
+            val cleanKey = periodKey.trim().take(32)
+            require(cleanKey.length >= 4) { "Period key must be at least 4 characters." }
+            val cleanPsych = psychologyNotes.trim().take(2000)
+            val cleanLessons = lessonsSummary.trim().take(2000)
+            val cleanPlan = nextActionPlan.trim().take(2000)
+            val rating = slAdherenceRating.coerceIn(1, 5)
+
+            // Check if a review for the same periodType & periodKey already exists for this user
+            val existingQuery = db.collection("discipline_reviews")
+                .whereEqualTo("userId", targetUserId)
+                .get()
+                .await()
+            val existingMatch = existingQuery.toObjects(DisciplineReviewEntity::class.java)
+                .firstOrNull { it.periodType == periodType.name && it.periodKey == cleanKey }
+
+            if (existingMatch != null && existingMatch.id.isNotBlank()) {
+                val docRef = db.collection("discipline_reviews").document(existingMatch.id)
+                docPath = docRef.path
+                docRef.update(
+                    mapOf(
+                        "periodType" to periodType.name,
+                        "periodKey" to cleanKey,
+                        "emotionState" to emotionState.name,
+                        "psychologyNotes" to cleanPsych,
+                        "slAdherenceRating" to rating,
+                        "lessonsSummary" to cleanLessons,
+                        "nextActionPlan" to cleanPlan,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                val docRef = db.collection("discipline_reviews").document()
+                docPath = docRef.path
+                docRef.set(
+                    mapOf(
+                        "userId" to targetUserId,
+                        "periodType" to periodType.name,
+                        "periodKey" to cleanKey,
+                        "emotionState" to emotionState.name,
+                        "psychologyNotes" to cleanPsych,
+                        "slAdherenceRating" to rating,
+                        "lessonsSummary" to cleanLessons,
+                        "nextActionPlan" to cleanPlan,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun encodeScreenshotToBase64(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw IllegalStateException("Unable to read selected image.")
+            val original = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                ?: throw IllegalArgumentException("Unsupported image format.")
+
+            val maxDim = 960
+            val scale = minOf(1f, maxDim.toFloat() / max(original.width, original.height).toFloat())
+            val scaled = if (scale < 1f) {
+                Bitmap.createScaledBitmap(
+                    original,
+                    (original.width * scale).roundToInt().coerceAtLeast(1),
+                    (original.height * scale).roundToInt().coerceAtLeast(1),
+                    true
                 )
-            )
-            Unit
+            } else {
+                original
+            }
+
+            var quality = 80
+            var jpegBytes: ByteArray
+            do {
+                val out = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                jpegBytes = out.toByteArray()
+                quality -= 12
+            } while (jpegBytes.size > 210_000 && quality >= 30)
+
+            if (scaled !== original) scaled.recycle()
+            original.recycle()
+
+            val encoded = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+            require(encoded.length <= MAX_SCREENSHOT_BASE64_LENGTH) {
+                "Compressed chart screenshot exceeds 320 KB limit."
+            }
+            encoded
         }
     }
 
-    suspend fun copyScreenshotToAppStorage(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val dir = File(context.filesDir, "screenshots").apply { mkdirs() }
-            val file = File(dir, "chart_${UUID.randomUUID()}.jpg")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                file.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            } ?: throw IllegalStateException("Unable to read selected image.")
-            file.absolutePath
-        }
-    }
+    suspend fun exportBackupJson(actor: UserEntity): Result<String> {
+        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in."))
+        return try {
+            val users = if (actor.roleEnum == UserRole.ADMIN) {
+                db.collection("users").get().await().toObjects(UserEntity::class.java)
+            } else {
+                listOfNotNull(
+                    db.collection("users").document(uid).get().await().toObject(UserEntity::class.java)
+                )
+            }
 
-    suspend fun exportBackupJson(actor: UserEntity): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+            val trades = if (actor.roleEnum == UserRole.ADMIN) {
+                db.collection("trades").get().await().toObjects(TradeEntity::class.java)
+            } else {
+                db.collection("trades").whereEqualTo("userId", uid).get().await()
+                    .toObjects(TradeEntity::class.java)
+            }
+
+            val reviews = if (actor.roleEnum == UserRole.ADMIN) {
+                db.collection("discipline_reviews").get().await()
+                    .toObjects(DisciplineReviewEntity::class.java)
+            } else {
+                db.collection("discipline_reviews").whereEqualTo("userId", uid).get().await()
+                    .toObjects(DisciplineReviewEntity::class.java)
+            }
+
             val root = JSONObject()
             root.put("brand", "Trading with Bangali Babu")
             root.put("exportedAt", System.currentTimeMillis())
-
-            val users = if (actor.role == UserRole.ADMIN) {
-                userDao.getAllUsersOnce()
-            } else {
-                listOfNotNull(userDao.getUserById(actor.id))
-            }
-            val trades = if (actor.role == UserRole.ADMIN) {
-                tradeDao.getAllTradesOnce()
-            } else {
-                tradeDao.getTradesByUserOnce(actor.id)
-            }
-            val reviews = if (actor.role == UserRole.ADMIN) {
-                reviewDao.getAllReviewsOnce()
-            } else {
-                reviewDao.getAllReviewsOnce().filter { it.userId == actor.id }
-            }
 
             val usersArr = JSONArray()
             users.forEach { u ->
                 usersArr.put(JSONObject().apply {
                     put("id", u.id)
+                    put("userId", u.userId)
                     put("name", u.name)
                     put("email", u.email)
-                    put("passwordHash", u.passwordHash)
-                    put("passwordSalt", u.passwordSalt)
-                    put("role", u.role.name)
-                    put("status", u.status.name)
+                    put("role", u.role)
+                    put("status", u.status)
                     put("dailyProfitGoal", u.dailyProfitGoal)
                     put("dailyMaxLossLimit", u.dailyMaxLossLimit)
                     put("maxTradesPerDay", u.maxTradesPerDay)
                     put("maxRiskPerTrade", u.maxRiskPerTrade)
-                    put("createdAt", u.createdAt)
-                    put("updatedAt", u.updatedAt)
                 })
             }
             root.put("users", usersArr)
@@ -529,8 +964,8 @@ class TradingRepository(
                     put("tradeDateMillis", t.tradeDateMillis)
                     put("tradeDateIso", t.tradeDateIso)
                     put("instrument", t.instrument)
-                    put("direction", t.direction.name)
-                    put("timeframe", t.timeframe.name)
+                    put("direction", t.direction)
+                    put("timeframe", t.timeframe)
                     put("entryPrice", t.entryPrice)
                     put("exitPrice", t.exitPrice)
                     put("stopLoss", t.stopLoss ?: JSONObject.NULL)
@@ -538,16 +973,14 @@ class TradingRepository(
                     put("lotSize", t.lotSize)
                     put("riskAmount", t.riskAmount)
                     put("actualPnl", t.actualPnl)
-                    put("result", t.result.name)
+                    put("result", t.result)
                     put("strategy", t.strategy)
                     put("entryReason", t.entryReason)
                     put("exitReason", t.exitReason)
                     put("mistakes", t.mistakes)
                     put("lessonsLearned", t.lessonsLearned)
-                    put("screenshotPath", t.screenshotPath ?: JSONObject.NULL)
+                    put("screenshotData", t.screenshotData ?: JSONObject.NULL)
                     put("notes", t.notes)
-                    put("createdAt", t.createdAt)
-                    put("updatedAt", t.updatedAt)
                 })
             }
             root.put("trades", tradesArr)
@@ -557,101 +990,184 @@ class TradingRepository(
                 reviewsArr.put(JSONObject().apply {
                     put("id", r.id)
                     put("userId", r.userId)
-                    put("periodType", r.periodType.name)
+                    put("periodType", r.periodType)
                     put("periodKey", r.periodKey)
-                    put("emotionState", r.emotionState.name)
+                    put("emotionState", r.emotionState)
                     put("psychologyNotes", r.psychologyNotes)
                     put("slAdherenceRating", r.slAdherenceRating)
                     put("lessonsSummary", r.lessonsSummary)
                     put("nextActionPlan", r.nextActionPlan)
-                    put("updatedAt", r.updatedAt)
                 })
             }
             root.put("reviews", reviewsArr)
-            root.toString(2)
+            Result.success(root.toString(2))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "backup_export")
+            Result.failure(e)
         }
     }
 
-    suspend fun restoreBackupJson(actor: UserEntity, jsonContent: String): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (actor.role != UserRole.ADMIN) throw SecurityException("Only Admin can restore a full database backup.")
+    suspend fun restoreBackupJson(actor: UserEntity, jsonContent: String): Result<Int> {
+        return try {
+            val uid = requireUserId()
+            if (actor.roleEnum != UserRole.ADMIN) {
+                throw SecurityException("Only Admin can restore a cloud database backup.")
+            }
+
             val root = JSONObject(jsonContent)
-            val usersArr = root.getJSONArray("users")
             val tradesArr = root.getJSONArray("trades")
             val reviewsArr = root.optJSONArray("reviews") ?: JSONArray()
 
-            val users = (0 until usersArr.length()).map { i ->
-                val o = usersArr.getJSONObject(i)
-                UserEntity(
-                    id = o.getLong("id"),
-                    name = o.getString("name"),
-                    email = o.getString("email"),
-                    passwordHash = o.getString("passwordHash"),
-                    passwordSalt = o.getString("passwordSalt"),
-                    role = UserRole.entries.firstOrNull { it.name == o.getString("role") } ?: UserRole.STUDENT,
-                    status = AccountStatus.entries.firstOrNull { it.name == o.getString("status") } ?: AccountStatus.ACTIVE,
-                    dailyProfitGoal = o.optDouble("dailyProfitGoal", 250.0),
-                    dailyMaxLossLimit = o.optDouble("dailyMaxLossLimit", 100.0),
-                    maxTradesPerDay = o.optInt("maxTradesPerDay", 5),
-                    maxRiskPerTrade = o.optDouble("maxRiskPerTrade", 50.0),
-                    createdAt = o.optLong("createdAt", System.currentTimeMillis()),
-                    updatedAt = o.optLong("updatedAt", System.currentTimeMillis())
-                )
-            }
-            require(users.any { it.role == UserRole.ADMIN }) { "Backup file does not contain an Admin account." }
+            var restoredTrades = 0
+            val batch = db.batch()
+            var opsInBatch = 0
 
-            val trades = (0 until tradesArr.length()).map { i ->
+            suspend fun flushIfNeeded() {
+                if (opsInBatch >= 400) {
+                    batch.commit().await()
+                    opsInBatch = 0
+                }
+            }
+
+            for (i in 0 until tradesArr.length()) {
                 val o = tradesArr.getJSONObject(i)
-                TradeEntity(
-                    id = o.getLong("id"),
-                    tradeCode = o.getString("tradeCode"),
-                    userId = o.getLong("userId"),
-                    userName = o.getString("userName"),
-                    tradeDateMillis = o.getLong("tradeDateMillis"),
-                    tradeDateIso = o.getString("tradeDateIso"),
-                    instrument = o.getString("instrument"),
-                    direction = TradeDirection.entries.firstOrNull { it.name == o.getString("direction") } ?: TradeDirection.BUY,
-                    timeframe = Timeframe.entries.firstOrNull { it.name == o.getString("timeframe") } ?: Timeframe.M15,
-                    entryPrice = o.getDouble("entryPrice"),
-                    exitPrice = o.getDouble("exitPrice"),
-                    stopLoss = if (o.isNull("stopLoss")) null else o.getDouble("stopLoss"),
-                    takeProfit = if (o.isNull("takeProfit")) null else o.getDouble("takeProfit"),
-                    lotSize = o.getDouble("lotSize"),
-                    riskAmount = o.getDouble("riskAmount"),
-                    actualPnl = o.getDouble("actualPnl"),
-                    result = TradeResult.entries.firstOrNull { it.name == o.getString("result") } ?: TradeResult.BREAK_EVEN,
-                    strategy = o.optString("strategy"),
-                    entryReason = o.optString("entryReason"),
-                    exitReason = o.optString("exitReason"),
-                    mistakes = o.optString("mistakes"),
-                    lessonsLearned = o.optString("lessonsLearned"),
-                    screenshotPath = if (o.isNull("screenshotPath")) null else o.optString("screenshotPath"),
-                    notes = o.optString("notes"),
-                    createdAt = o.optLong("createdAt", System.currentTimeMillis()),
-                    updatedAt = o.optLong("updatedAt", System.currentTimeMillis())
-                )
+                val rawId = o.optString("id")
+                val ref = if (isValidDocId(rawId)) db.collection("trades").document(rawId)
+                else db.collection("trades").document()
+
+                val existingSnap = ref.get().await()
+                val tradeUserId = o.optString("userId").takeIf { isValidDocId(it) } ?: uid
+                val tradeCode = o.optString("tradeCode").ifBlank { "TWBB-${ref.id.take(4).uppercase(Locale.US)}" }.take(32)
+                val instrument = o.optString("instrument").trim().uppercase(Locale.US).ifBlank { "UNKNOWN" }.take(40)
+                val direction = TradeDirection.entries.firstOrNull { it.name == o.optString("direction") }?.name ?: TradeDirection.BUY.name
+                val timeframe = Timeframe.entries.firstOrNull { it.name == o.optString("timeframe") }?.name ?: Timeframe.M15.name
+                val result = TradeResult.entries.firstOrNull { it.name == o.optString("result") }?.name ?: TradeResult.BREAK_EVEN.name
+                val sl = if (o.isNull("stopLoss")) null else o.optDouble("stopLoss").takeIf { !it.isNaN() && it >= 0.0 }
+                val tp = if (o.isNull("takeProfit")) null else o.optDouble("takeProfit").takeIf { !it.isNaN() && it >= 0.0 }
+                val shot = if (o.isNull("screenshotData")) null else o.optString("screenshotData").takeIf { it.isNotBlank() && it.length <= MAX_SCREENSHOT_BASE64_LENGTH }
+                val dateIso = o.optString("tradeDateIso").let { if (it.length == 10) it else "2026-01-01" }
+                val dateMillis = o.optLong("tradeDateMillis").let { if (it > 0L) it else System.currentTimeMillis() }
+
+                if (existingSnap.exists()) {
+                    batch.update(
+                        ref,
+                        hashMapOf<String, Any?>(
+                            "userName" to o.optString("userName").ifBlank { actor.name }.take(80),
+                            "tradeDateMillis" to dateMillis,
+                            "tradeDateIso" to dateIso,
+                            "instrument" to instrument,
+                            "direction" to direction,
+                            "timeframe" to timeframe,
+                            "entryPrice" to o.optDouble("entryPrice", 1.0).coerceAtLeast(0.0001),
+                            "exitPrice" to o.optDouble("exitPrice", 1.0).coerceAtLeast(0.0001),
+                            "stopLoss" to sl,
+                            "takeProfit" to tp,
+                            "lotSize" to o.optDouble("lotSize", 1.0).coerceAtLeast(0.0001),
+                            "riskAmount" to o.optDouble("riskAmount", 0.0).coerceAtLeast(0.0),
+                            "actualPnl" to o.optDouble("actualPnl", 0.0),
+                            "result" to result,
+                            "strategy" to o.optString("strategy").take(120),
+                            "entryReason" to o.optString("entryReason").take(1000),
+                            "exitReason" to o.optString("exitReason").take(1000),
+                            "mistakes" to o.optString("mistakes").take(500),
+                            "lessonsLearned" to o.optString("lessonsLearned").take(1000),
+                            "screenshotData" to shot,
+                            "notes" to o.optString("notes").take(1500),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    val createPayload = mapOf(
+                        "tradeCode" to tradeCode,
+                        "userId" to tradeUserId,
+                        "userName" to o.optString("userName").ifBlank { actor.name }.take(80),
+                        "tradeDateMillis" to dateMillis,
+                        "tradeDateIso" to dateIso,
+                        "instrument" to instrument,
+                        "direction" to direction,
+                        "timeframe" to timeframe,
+                        "entryPrice" to o.optDouble("entryPrice", 1.0).coerceAtLeast(0.0001),
+                        "exitPrice" to o.optDouble("exitPrice", 1.0).coerceAtLeast(0.0001),
+                        "stopLoss" to sl,
+                        "takeProfit" to tp,
+                        "lotSize" to o.optDouble("lotSize", 1.0).coerceAtLeast(0.0001),
+                        "riskAmount" to o.optDouble("riskAmount", 0.0).coerceAtLeast(0.0),
+                        "actualPnl" to o.optDouble("actualPnl", 0.0),
+                        "result" to result,
+                        "strategy" to o.optString("strategy").take(120),
+                        "entryReason" to o.optString("entryReason").take(1000),
+                        "exitReason" to o.optString("exitReason").take(1000),
+                        "mistakes" to o.optString("mistakes").take(500),
+                        "lessonsLearned" to o.optString("lessonsLearned").take(1000),
+                        "screenshotData" to shot,
+                        "notes" to o.optString("notes").take(1500),
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ).filterValues { it != null }
+                    batch.set(ref, createPayload)
+                }
+                restoredTrades++
+                opsInBatch++
+                flushIfNeeded()
             }
 
-            val reviews = (0 until reviewsArr.length()).map { i ->
+            for (i in 0 until reviewsArr.length()) {
                 val o = reviewsArr.getJSONObject(i)
-                DisciplineReviewEntity(
-                    id = o.getLong("id"),
-                    userId = o.getLong("userId"),
-                    periodType = ReviewPeriod.entries.firstOrNull { it.name == o.getString("periodType") } ?: ReviewPeriod.WEEKLY,
-                    periodKey = o.getString("periodKey"),
-                    emotionState = EmotionState.entries.firstOrNull { it.name == o.optString("emotionState") } ?: EmotionState.CALM,
-                    psychologyNotes = o.optString("psychologyNotes"),
-                    slAdherenceRating = o.optInt("slAdherenceRating", 3),
-                    lessonsSummary = o.optString("lessonsSummary"),
-                    nextActionPlan = o.optString("nextActionPlan"),
-                    updatedAt = o.optLong("updatedAt", System.currentTimeMillis())
-                )
+                val rawId = o.optString("id")
+                val ref = if (isValidDocId(rawId)) db.collection("discipline_reviews").document(rawId)
+                else db.collection("discipline_reviews").document()
+                val existingSnap = ref.get().await()
+                val reviewUserId = o.optString("userId").takeIf { isValidDocId(it) } ?: uid
+                val periodType = ReviewPeriod.entries.firstOrNull { it.name == o.optString("periodType") }?.name ?: ReviewPeriod.WEEKLY.name
+                val periodKey = o.optString("periodKey").trim().ifBlank { "2026-W01" }.padEnd(4, '0').take(32)
+                val emotionState = EmotionState.entries.firstOrNull { it.name == o.optString("emotionState") }?.name ?: EmotionState.CALM.name
+
+                if (existingSnap.exists()) {
+                    batch.update(
+                        ref,
+                        mapOf(
+                            "periodType" to periodType,
+                            "periodKey" to periodKey,
+                            "emotionState" to emotionState,
+                            "psychologyNotes" to o.optString("psychologyNotes").take(2000),
+                            "slAdherenceRating" to o.optInt("slAdherenceRating", 3).coerceIn(1, 5),
+                            "lessonsSummary" to o.optString("lessonsSummary").take(2000),
+                            "nextActionPlan" to o.optString("nextActionPlan").take(2000),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    batch.set(
+                        ref,
+                        mapOf(
+                            "userId" to reviewUserId,
+                            "periodType" to periodType,
+                            "periodKey" to periodKey,
+                            "emotionState" to emotionState,
+                            "psychologyNotes" to o.optString("psychologyNotes").take(2000),
+                            "slAdherenceRating" to o.optInt("slAdherenceRating", 3).coerceIn(1, 5),
+                            "lessonsSummary" to o.optString("lessonsSummary").take(2000),
+                            "nextActionPlan" to o.optString("nextActionPlan").take(2000),
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                opsInBatch++
+                flushIfNeeded()
             }
 
-            userDao.upsertUsers(users)
-            tradeDao.insertTrades(trades)
-            reviewDao.upsertReviews(reviews)
-            trades.size
+            if (opsInBatch > 0) {
+                batch.commit().await()
+            }
+            Result.success(restoredTrades)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "backup_restore")
+            Result.failure(e)
         }
     }
 }
