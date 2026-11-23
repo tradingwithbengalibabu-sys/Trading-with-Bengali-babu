@@ -1,0 +1,6 @@
+{
+  "name": "Trading with Bangali Babu",
+  "description": "Professional Trading Journal and Student Performance Management platform with role-based analytics, discipline tracking, and PDF/CSV reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
