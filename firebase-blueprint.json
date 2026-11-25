@@ -21,10 +21,25 @@
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
         "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "signalAccess": { "type": "string", "enum": ["ALLOWED", "BLOCKED"] },
+        "preferredCurrency": { "type": "string", "enum": ["INR", "USD"] },
         "dailyProfitGoal": { "type": "number" },
         "dailyMaxLossLimit": { "type": "number" },
         "maxTradesPerDay": { "type": "integer" },
         "maxRiskPerTrade": { "type": "number" },
+        "lastAnnouncementReadMillis": { "type": "integer" },
+        "slAlertLookbackCount": { "type": "integer" },
+        "slAlertThreshold": { "type": "integer" },
+        "strategySlThreshold": { "type": "integer" },
+        "breakRecommendedUntilMillis": { "type": "integer" },
+        "mobileNumber": { "type": "string" },
+        "whatsappNumber": { "type": "string" },
+        "dateOfBirth": { "type": "string" },
+        "gender": { "type": "string", "enum": ["", "Male", "Female", "Other", "Prefer not to say"] },
+        "fullAddress": { "type": "string" },
+        "profilePhotoUrl": { "type": "string" },
+        "profilePhotoPath": { "type": "string" },
+        "profileCompleted": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
       },
@@ -38,6 +53,7 @@
         "name": { "type": "string" },
         "email": { "type": "string" },
         "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "preferredCurrency": { "type": "string", "enum": ["INR", "USD"] },
         "dailyProfitGoal": { "type": "number" },
         "dailyMaxLossLimit": { "type": "number" },
         "maxTradesPerDay": { "type": "integer" },
@@ -50,7 +66,7 @@
     },
     "Trade": {
       "title": "Trade",
-      "description": "Complete 21-field trading journal entry owned by a user.",
+      "description": "Complete multi-currency trading journal entry owned by a user.",
       "type": "object",
       "properties": {
         "tradeCode": { "type": "string" },
@@ -61,6 +77,8 @@
         "instrument": { "type": "string" },
         "direction": { "type": "string", "enum": ["BUY", "SELL"] },
         "timeframe": { "type": "string", "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1"] },
+        "currency": { "type": "string", "enum": ["INR", "USD"] },
+        "usdToInrRate": { "type": "number" },
         "entryPrice": { "type": "number" },
         "exitPrice": { "type": "number" },
         "stopLoss": { "type": "number" },
@@ -68,6 +86,8 @@
         "lotSize": { "type": "number" },
         "riskAmount": { "type": "number" },
         "actualPnl": { "type": "number" },
+        "fees": { "type": "number" },
+        "tradeStatus": { "type": "string", "enum": ["CLOSED", "OPEN"] },
         "result": { "type": "string", "enum": ["WIN", "LOSS", "BREAK_EVEN"] },
         "strategy": { "type": "string" },
         "entryReason": { "type": "string" },
@@ -76,6 +96,12 @@
         "lessonsLearned": { "type": "string" },
         "screenshotData": { "type": "string" },
         "notes": { "type": "string" },
+        "entryTimeMillis": { "type": "integer" },
+        "exitDateIso": { "type": "string" },
+        "exitTimeMillis": { "type": "integer" },
+        "tradingSession": { "type": "string" },
+        "exitClosureType": { "type": "string", "enum": ["", "AUTO_SL", "AUTO_TP", "TRAILING_SL", "MANUAL", "BREAKEVEN", "UNKNOWN"] },
+        "timezoneId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
       },
@@ -98,6 +124,253 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
       },
       "required": ["userId", "periodType", "periodKey", "emotionState", "psychologyNotes", "slAdherenceRating", "lessonsSummary", "nextActionPlan", "createdAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Private 1:1 Student-Admin thread metadata and unread counters.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageSenderRole": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
+        "lastMessageAtMillis": { "type": "integer" },
+        "unreadByAdminCount": { "type": "integer" },
+        "unreadByStudentCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "studentName", "studentEmail", "lastMessageText", "lastMessageSenderRole", "lastMessageAtMillis", "unreadByAdminCount", "unreadByStudentCount", "createdAt", "updatedAt"]
+    },
+    "DirectMessage": {
+      "title": "DirectMessage",
+      "description": "Immutable message inside a student's private conversation with Admin.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
+        "body": { "type": "string" },
+        "sentAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "senderId", "senderName", "senderRole", "body", "sentAtMillis", "createdAt"]
+    },
+    "StudentWarning": {
+      "title": "StudentWarning",
+      "description": "Important risk or discipline warning sent by Admin to a specific student.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "senderAdminId": { "type": "string" },
+        "senderAdminName": { "type": "string" },
+        "severity": { "type": "string", "enum": ["ADVISORY", "IMPORTANT", "CRITICAL"] },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "readByStudent": { "type": "boolean" },
+        "sentAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "studentName", "senderAdminId", "senderAdminName", "severity", "title", "message", "readByStudent", "sentAtMillis", "createdAt", "updatedAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Broadcast announcement published by Admin for all active students.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "priority": { "type": "string", "enum": ["NORMAL", "IMPORTANT"] },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "publishedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "message", "priority", "authorId", "authorName", "publishedAtMillis", "createdAt", "updatedAt"]
+    },
+    "SmartDisciplineAlert": {
+      "title": "SmartDisciplineAlert",
+      "description": "Automated risk warning alert for Weekly $200 eq. Loss, 10 Consecutive Stop Losses, and 3 Strategy Consecutive Stop Losses.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "alertType": { "type": "string", "enum": ["WEEKLY_LOSS_LIMIT", "STOP_LOSS_STREAK", "STRATEGY_LOSS_LIMIT"] },
+        "triggerKey": { "type": "string" },
+        "strategyName": { "type": "string" },
+        "stopLossCount": { "type": "integer" },
+        "lookbackCount": { "type": "integer" },
+        "recommendedBreakDays": { "type": "integer" },
+        "lossAmountUsd": { "type": "number" },
+        "lossAmountInr": { "type": "number" },
+        "exchangeRateUsed": { "type": "number" },
+        "triggerDateIso": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "acknowledged": { "type": "boolean" },
+        "acknowledgedAtMillis": { "type": "integer" },
+        "triggeredAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "alertType", "triggerKey", "strategyName", "stopLossCount", "lookbackCount", "recommendedBreakDays", "title", "message", "acknowledged", "acknowledgedAtMillis", "triggeredAtMillis", "createdAt", "updatedAt"]
+    },
+    "WeeklyReport": {
+      "title": "WeeklyReport",
+      "description": "Automated weekly trading mistake analysis and personalized performance report.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "weekKey": { "type": "string" },
+        "weekStartIso": { "type": "string" },
+        "weekEndIso": { "type": "string" },
+        "currencyCode": { "type": "string", "enum": ["INR", "USD"] },
+        "totalTrades": { "type": "integer" },
+        "winningTrades": { "type": "integer" },
+        "losingTrades": { "type": "integer" },
+        "breakEvenTrades": { "type": "integer" },
+        "stopLossHits": { "type": "integer" },
+        "netPnl": { "type": "number" },
+        "winRatePercent": { "type": "number" },
+        "disciplineScore": { "type": "integer" },
+        "overtradingDays": { "type": "integer" },
+        "revengeTradingCount": { "type": "integer" },
+        "noStopLossCount": { "type": "integer" },
+        "ruleViolationsCount": { "type": "integer" },
+        "repeatedMistakes": { "type": "array", "items": { "type": "string" } },
+        "poorStrategies": { "type": "array", "items": { "type": "string" } },
+        "ruleViolationDetails": { "type": "array", "items": { "type": "string" } },
+        "improvementAreas": { "type": "array", "items": { "type": "string" } },
+        "personalizedSuggestions": { "type": "array", "items": { "type": "string" } },
+        "summaryText": { "type": "string" },
+        "readByUser": { "type": "boolean" },
+        "generatedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "weekKey", "weekStartIso", "weekEndIso", "currencyCode", "totalTrades", "winningTrades", "losingTrades", "breakEvenTrades", "stopLossHits", "netPnl", "winRatePercent", "disciplineScore", "overtradingDays", "revengeTradingCount", "noStopLossCount", "ruleViolationsCount", "repeatedMistakes", "poorStrategies", "ruleViolationDetails", "improvementAreas", "personalizedSuggestions", "summaryText", "readByUser", "generatedAtMillis", "createdAt", "updatedAt"]
+    },
+    "SignalAccessRecord": {
+      "title": "SignalAccessRecord",
+      "description": "Independent Admin-controlled signal permission record separate from account suspension.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "signalAccess": { "type": "string", "enum": ["ALLOWED", "BLOCKED"] },
+        "updatedByUid": { "type": "string" },
+        "updatedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "studentName", "studentEmail", "signalAccess", "updatedByUid", "updatedAtMillis", "createdAt", "updatedAt"]
+    },
+    "TradeSignal": {
+      "title": "TradeSignal",
+      "description": "Admin-published trade signal with screenshots, voice commentary, audience targeting, and status.",
+      "type": "object",
+      "properties": {
+        "instrument": { "type": "string" },
+        "direction": { "type": "string", "enum": ["BUY", "SELL"] },
+        "entryPrice": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "target1": { "type": "number" },
+        "target2": { "type": "number" },
+        "riskRewardRatio": { "type": "string" },
+        "strategyName": { "type": "string" },
+        "instructions": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "TARGET_HIT", "SL_HIT", "CANCELLED"] },
+        "audienceType": { "type": "string", "enum": ["ALL_STUDENTS", "SELECTED_STUDENTS"] },
+        "selectedStudentIds": { "type": "array", "items": { "type": "string" } },
+        "screenshotUrls": { "type": "array", "items": { "type": "string" } },
+        "screenshotPaths": { "type": "array", "items": { "type": "string" } },
+        "voiceNoteUrl": { "type": "string" },
+        "voiceNotePath": { "type": "string" },
+        "voiceDurationSec": { "type": "integer" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAtMillis": { "type": "integer" },
+        "updatedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["instrument", "direction", "entryPrice", "stopLoss", "target1", "riskRewardRatio", "strategyName", "instructions", "status", "audienceType", "selectedStudentIds", "screenshotUrls", "screenshotPaths", "voiceNoteUrl", "voiceNotePath", "voiceDurationSec", "authorId", "authorName", "createdAtMillis", "updatedAtMillis", "createdAt", "updatedAt"]
+    },
+    "TradeSignalReaction": {
+      "title": "TradeSignalReaction",
+      "description": "Single-emoji student reaction to an Admin trade signal.",
+      "type": "object",
+      "properties": {
+        "signalId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "emoji": { "type": "string", "enum": ["👍", "❤️", "🔥", "👏", "🚀"] },
+        "reactedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["signalId", "userId", "userName", "emoji", "reactedAtMillis", "createdAt", "updatedAt"]
+    },
+    "LiveClassroom": {
+      "title": "LiveClassroom",
+      "description": "Live Online Classroom session hosted by Admin/Teacher.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "roomName": { "type": "string" },
+        "isLive": { "type": "boolean" },
+        "isScreenSharing": { "type": "boolean" },
+        "hostUid": { "type": "string" },
+        "hostName": { "type": "string" },
+        "startedAtMillis": { "type": "integer" },
+        "endedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "roomName", "isLive", "isScreenSharing", "hostUid", "hostName", "startedAtMillis", "endedAtMillis", "createdAt", "updatedAt"]
+    },
+    "LiveClassroomParticipant": {
+      "title": "LiveClassroomParticipant",
+      "description": "Classroom participant state with hand-raise and teacher mic moderation controls.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
+        "profilePhotoUrl": { "type": "string" },
+        "joinedAtMillis": { "type": "integer" },
+        "handRaised": { "type": "boolean" },
+        "voiceApproved": { "type": "boolean" },
+        "isMutedByTeacher": { "type": "boolean" },
+        "isSelfMuted": { "type": "boolean" },
+        "isRemoved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "role", "joinedAtMillis", "handRaised", "voiceApproved", "isMutedByTeacher", "isSelfMuted", "isRemoved", "createdAt", "updatedAt"]
+    },
+    "LiveClassroomMessage": {
+      "title": "LiveClassroomMessage",
+      "description": "Real-time text chat message inside Live Classroom.",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string", "enum": ["ADMIN", "STUDENT"] },
+        "body": { "type": "string" },
+        "sentAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["roomId", "senderId", "senderName", "senderRole", "body", "sentAtMillis", "createdAt"]
     }
   },
   "firestore": {
@@ -120,6 +393,54 @@
     "/discipline_reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/DisciplineReview" },
       "description": "Trading psychology notes and periodic self-reviews isolated by userId."
+    },
+    "/conversations/{studentUid}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Private 1:1 thread summary per student."
+    },
+    "/conversations/{studentUid}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/DirectMessage" },
+      "description": "Private direct messages between studentUid and Admin."
+    },
+    "/warnings/{warningId}": {
+      "schema": { "$ref": "#/entities/StudentWarning" },
+      "description": "Individual risk/discipline warnings sent by Admin to a student."
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "All-student broadcast announcements authored by Admin."
+    },
+    "/smart_discipline_alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/SmartDisciplineAlert" },
+      "description": "Owner-private & Admin-monitored automated SL streak and strategy loss warnings."
+    },
+    "/weekly_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/WeeklyReport" },
+      "description": "Owner-private & Admin-monitored automated weekly mistake analysis reports."
+    },
+    "/signal_access/{userId}": {
+      "schema": { "$ref": "#/entities/SignalAccessRecord" },
+      "description": "Separate Admin-managed Signal Access permissions independent of general account suspension."
+    },
+    "/trade_signals/{signalId}": {
+      "schema": { "$ref": "#/entities/TradeSignal" },
+      "description": "Admin Trade Desk BUY/SELL signals with screenshots, voice commentary, and targeted audience access."
+    },
+    "/trade_signals/{signalId}/reactions/{userId}": {
+      "schema": { "$ref": "#/entities/TradeSignalReaction" },
+      "description": "Eligible student emoji reactions on Admin trade signals."
+    },
+    "/live_classrooms/{roomId}": {
+      "schema": { "$ref": "#/entities/LiveClassroom" },
+      "description": "Live Online Classroom session state and screen-share status."
+    },
+    "/live_classrooms/{roomId}/participants/{participantUid}": {
+      "schema": { "$ref": "#/entities/LiveClassroomParticipant" },
+      "description": "Classroom participant roster with raise-hand, voice approval, and teacher moderation controls."
+    },
+    "/live_classrooms/{roomId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/LiveClassroomMessage" },
+      "description": "Real-time text chat messages inside a Live Classroom session."
     }
   }
 }

@@ -43,16 +43,39 @@ service cloud.firestore {
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE';
     }
 
+    function hasSignalAccess() {
+      return isActiveUser() &&
+             (!('signalAccess' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.signalAccess == 'ALLOWED') &&
+             (!exists(/databases/$(database)/documents/signal_access/$(request.auth.uid)) ||
+              get(/databases/$(database)/documents/signal_access/$(request.auth.uid)).data.signalAccess == 'ALLOWED');
+    }
+
     function isValidUserProfile(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.role in ['ADMIN', 'STUDENT'] &&
              data.status in ['ACTIVE', 'SUSPENDED'] &&
+             (!('signalAccess' in data) || data.signalAccess in ['ALLOWED', 'BLOCKED']) &&
+             (!('preferredCurrency' in data) || data.preferredCurrency in ['INR', 'USD']) &&
              data.dailyProfitGoal is number && data.dailyProfitGoal >= 0 &&
              data.dailyMaxLossLimit is number && data.dailyMaxLossLimit >= 0 &&
              data.maxTradesPerDay is int && data.maxTradesPerDay >= 1 && data.maxTradesPerDay <= 100 &&
              data.maxRiskPerTrade is number && data.maxRiskPerTrade >= 0 &&
+             (!('lastAnnouncementReadMillis' in data) || (data.lastAnnouncementReadMillis is int && data.lastAnnouncementReadMillis >= 0)) &&
+             (!('slAlertLookbackCount' in data) || (data.slAlertLookbackCount is int && data.slAlertLookbackCount >= 2 && data.slAlertLookbackCount <= 50)) &&
+             (!('slAlertThreshold' in data) || (data.slAlertThreshold is int && data.slAlertThreshold >= 2 && data.slAlertThreshold <= 50)) &&
+             (!('strategySlThreshold' in data) || (data.strategySlThreshold is int && data.strategySlThreshold >= 1 && data.strategySlThreshold <= 50)) &&
+             (!('breakRecommendedUntilMillis' in data) || (data.breakRecommendedUntilMillis is int && data.breakRecommendedUntilMillis >= 0)) &&
+             (!('mobileNumber' in data) || (data.mobileNumber is string && data.mobileNumber.size() <= 30)) &&
+             (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 30)) &&
+             (!('dateOfBirth' in data) || (data.dateOfBirth is string && data.dateOfBirth.size() <= 20)) &&
+             (!('gender' in data) || data.gender in ['', 'Male', 'Female', 'Other', 'Prefer not to say']) &&
+             (!('fullAddress' in data) || (data.fullAddress is string && data.fullAddress.size() <= 300)) &&
+             (!('profilePhotoUrl' in data) || (data.profilePhotoUrl is string && data.profilePhotoUrl.size() <= 1500)) &&
+             (!('profilePhotoPath' in data) || (data.profilePhotoPath is string && data.profilePhotoPath.size() <= 300)) &&
+             (!('profileCompleted' in data) || data.profileCompleted is bool) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -61,6 +84,7 @@ service cloud.firestore {
       return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.status in ['ACTIVE', 'SUSPENDED'] &&
+             (!('preferredCurrency' in data) || data.preferredCurrency in ['INR', 'USD']) &&
              data.dailyProfitGoal is number && data.dailyProfitGoal >= 0 &&
              data.dailyMaxLossLimit is number && data.dailyMaxLossLimit >= 0 &&
              data.maxTradesPerDay is int && data.maxTradesPerDay >= 1 && data.maxTradesPerDay <= 100 &&
@@ -79,6 +103,8 @@ service cloud.firestore {
              data.instrument is string && data.instrument.size() >= 1 && data.instrument.size() <= 40 &&
              data.direction in ['BUY', 'SELL'] &&
              data.timeframe in ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] &&
+             (!('currency' in data) || data.currency in ['INR', 'USD']) &&
+             (!('usdToInrRate' in data) || (data.usdToInrRate is number && data.usdToInrRate > 0 && data.usdToInrRate <= 1000)) &&
              data.entryPrice is number && data.entryPrice > 0 &&
              data.exitPrice is number && data.exitPrice > 0 &&
              (!('stopLoss' in data) || data.stopLoss == null || (data.stopLoss is number && data.stopLoss >= 0)) &&
@@ -86,6 +112,8 @@ service cloud.firestore {
              data.lotSize is number && data.lotSize > 0 &&
              data.riskAmount is number && data.riskAmount >= 0 &&
              data.actualPnl is number &&
+             (!('fees' in data) || (data.fees is number && data.fees >= 0)) &&
+             (!('tradeStatus' in data) || data.tradeStatus in ['CLOSED', 'OPEN']) &&
              data.result in ['WIN', 'LOSS', 'BREAK_EVEN'] &&
              data.strategy is string && data.strategy.size() <= 120 &&
              data.entryReason is string && data.entryReason.size() <= 1000 &&
@@ -94,6 +122,12 @@ service cloud.firestore {
              data.lessonsLearned is string && data.lessonsLearned.size() <= 1000 &&
              (!('screenshotData' in data) || data.screenshotData == null || (data.screenshotData is string && data.screenshotData.size() <= 350000)) &&
              data.notes is string && data.notes.size() <= 1500 &&
+             (!('entryTimeMillis' in data) || data.entryTimeMillis == null || (data.entryTimeMillis is int && data.entryTimeMillis > 0)) &&
+             (!('exitDateIso' in data) || (data.exitDateIso is string && (data.exitDateIso.size() == 0 || data.exitDateIso.size() == 10))) &&
+             (!('exitTimeMillis' in data) || data.exitTimeMillis == null || (data.exitTimeMillis is int && data.exitTimeMillis > 0 && (!('entryTimeMillis' in data) || data.entryTimeMillis == null || data.exitTimeMillis >= data.entryTimeMillis))) &&
+             (!('tradingSession' in data) || (data.tradingSession is string && data.tradingSession.size() <= 60)) &&
+             (!('exitClosureType' in data) || data.exitClosureType in ['', 'AUTO_SL', 'AUTO_TP', 'TRAILING_SL', 'MANUAL', 'BREAKEVEN', 'UNKNOWN']) &&
+             (!('timezoneId' in data) || (data.timezoneId is string && data.timezoneId.size() <= 60)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -107,6 +141,108 @@ service cloud.firestore {
              data.slAdherenceRating is int && data.slAdherenceRating >= 1 && data.slAdherenceRating <= 5 &&
              data.lessonsSummary is string && data.lessonsSummary.size() <= 2000 &&
              data.nextActionPlan is string && data.nextActionPlan.size() <= 2000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidConversation(data) {
+      return data.studentId is string && isValidId(data.studentId) &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 80 &&
+             data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 120 &&
+             data.lastMessageText is string && data.lastMessageText.size() >= 1 && data.lastMessageText.size() <= 2000 &&
+             data.lastMessageSenderRole in ['ADMIN', 'STUDENT'] &&
+             data.lastMessageAtMillis is int && data.lastMessageAtMillis > 0 &&
+             data.unreadByAdminCount is int && data.unreadByAdminCount >= 0 &&
+             data.unreadByStudentCount is int && data.unreadByStudentCount >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidDirectMessage(data) {
+      return data.studentId is string && isValidId(data.studentId) &&
+             data.senderId is string && isValidId(data.senderId) &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+             data.senderRole in ['ADMIN', 'STUDENT'] &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 2000 &&
+             data.sentAtMillis is int && data.sentAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidWarning(data) {
+      return data.studentId is string && isValidId(data.studentId) &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 80 &&
+             data.senderAdminId is string && isValidId(data.senderAdminId) &&
+             data.senderAdminName is string && data.senderAdminName.size() >= 1 && data.senderAdminName.size() <= 80 &&
+             data.severity in ['ADVISORY', 'IMPORTANT', 'CRITICAL'] &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 2000 &&
+             data.readByStudent is bool &&
+             data.sentAtMillis is int && data.sentAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 2500 &&
+             data.priority in ['NORMAL', 'IMPORTANT'] &&
+             data.authorId is string && isValidId(data.authorId) &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             data.publishedAtMillis is int && data.publishedAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSmartDisciplineAlert(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80 &&
+             data.alertType in ['WEEKLY_LOSS_LIMIT', 'STOP_LOSS_STREAK', 'STRATEGY_LOSS_LIMIT'] &&
+             data.triggerKey is string && data.triggerKey.size() >= 1 && data.triggerKey.size() <= 128 &&
+             data.strategyName is string && data.strategyName.size() <= 120 &&
+             data.stopLossCount is int && data.stopLossCount >= 0 && data.stopLossCount <= 10000 &&
+             data.lookbackCount is int && data.lookbackCount >= 0 && data.lookbackCount <= 10000 &&
+             data.recommendedBreakDays is int && data.recommendedBreakDays >= 0 && data.recommendedBreakDays <= 30 &&
+             (!('lossAmountUsd' in data) || (data.lossAmountUsd is number && data.lossAmountUsd >= 0)) &&
+             (!('lossAmountInr' in data) || (data.lossAmountInr is number && data.lossAmountInr >= 0)) &&
+             (!('exchangeRateUsed' in data) || (data.exchangeRateUsed is number && data.exchangeRateUsed > 0 && data.exchangeRateUsed <= 1000)) &&
+             (!('triggerDateIso' in data) || (data.triggerDateIso is string && data.triggerDateIso.size() <= 20)) &&
+             (!('resolved' in data) || data.resolved is bool) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 2000 &&
+             data.acknowledged is bool &&
+             data.acknowledgedAtMillis is int && data.acknowledgedAtMillis >= 0 &&
+             data.triggeredAtMillis is int && data.triggeredAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidWeeklyReport(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80 &&
+             data.weekKey is string && data.weekKey.size() >= 4 && data.weekKey.size() <= 24 &&
+             data.weekStartIso is string && data.weekStartIso.size() == 10 &&
+             data.weekEndIso is string && data.weekEndIso.size() == 10 &&
+             data.currencyCode in ['INR', 'USD'] &&
+             data.totalTrades is int && data.totalTrades >= 0 &&
+             data.winningTrades is int && data.winningTrades >= 0 &&
+             data.losingTrades is int && data.losingTrades >= 0 &&
+             data.breakEvenTrades is int && data.breakEvenTrades >= 0 &&
+             data.stopLossHits is int && data.stopLossHits >= 0 &&
+             data.netPnl is number &&
+             data.winRatePercent is number && data.winRatePercent >= 0 && data.winRatePercent <= 100 &&
+             data.disciplineScore is int && data.disciplineScore >= 0 && data.disciplineScore <= 100 &&
+             data.overtradingDays is int && data.overtradingDays >= 0 &&
+             data.revengeTradingCount is int && data.revengeTradingCount >= 0 &&
+             data.noStopLossCount is int && data.noStopLossCount >= 0 &&
+             data.ruleViolationsCount is int && data.ruleViolationsCount >= 0 &&
+             data.repeatedMistakes is list && data.repeatedMistakes.size() <= 50 &&
+             data.poorStrategies is list && data.poorStrategies.size() <= 50 &&
+             data.ruleViolationDetails is list && data.ruleViolationDetails.size() <= 50 &&
+             data.improvementAreas is list && data.improvementAreas.size() <= 50 &&
+             data.personalizedSuggestions is list && data.personalizedSuggestions.size() <= 50 &&
+             data.summaryText is string && data.summaryText.size() <= 1500 &&
+             data.readByUser is bool &&
+             data.generatedAtMillis is int && data.generatedAtMillis > 0 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -125,6 +261,101 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(adminUid) && adminUid != request.auth.uid;
     }
 
+    function isValidSignalAccessRecord(data, targetUid) {
+      return data.userId is string && data.userId == targetUid && isValidId(data.userId) &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 80 &&
+             data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 120 &&
+             data.signalAccess in ['ALLOWED', 'BLOCKED'] &&
+             data.updatedByUid is string && isValidId(data.updatedByUid) &&
+             data.updatedAtMillis is int && data.updatedAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTradeSignal(data) {
+      return data.instrument is string && data.instrument.size() >= 1 && data.instrument.size() <= 40 &&
+             data.direction in ['BUY', 'SELL'] &&
+             data.entryPrice is number && data.entryPrice > 0 &&
+             data.stopLoss is number && data.stopLoss >= 0 &&
+             data.target1 is number && data.target1 > 0 &&
+             (!('target2' in data) || data.target2 == null || (data.target2 is number && data.target2 > 0)) &&
+             data.riskRewardRatio is string && data.riskRewardRatio.size() <= 32 &&
+             data.strategyName is string && data.strategyName.size() <= 120 &&
+             data.instructions is string && data.instructions.size() <= 2500 &&
+             data.status in ['ACTIVE', 'TARGET_HIT', 'SL_HIT', 'CANCELLED'] &&
+             data.audienceType in ['ALL_STUDENTS', 'SELECTED_STUDENTS'] &&
+             data.selectedStudentIds is list && data.selectedStudentIds.size() <= 500 &&
+             (data.selectedStudentIds.size() == 0 || data.selectedStudentIds[0] is string) &&
+             data.screenshotUrls is list && data.screenshotUrls.size() <= 4 &&
+             (data.screenshotUrls.size() == 0 || data.screenshotUrls[0] is string) &&
+             data.screenshotPaths is list && data.screenshotPaths.size() <= 4 &&
+             (data.screenshotPaths.size() == 0 || data.screenshotPaths[0] is string) &&
+             data.voiceNoteUrl is string && data.voiceNoteUrl.size() <= 1500 &&
+             data.voiceNotePath is string && data.voiceNotePath.size() <= 300 &&
+             data.voiceDurationSec is int && data.voiceDurationSec >= 0 && data.voiceDurationSec <= 1800 &&
+             data.authorId is string && isValidId(data.authorId) &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             data.createdAtMillis is int && data.createdAtMillis > 0 &&
+             data.updatedAtMillis is int && data.updatedAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTradeSignalReaction(data, parentSignalId, ownerUid) {
+      return data.signalId is string && data.signalId == parentSignalId &&
+             data.userId is string && data.userId == ownerUid &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80 &&
+             data.emoji in ['👍', '❤️', '🔥', '👏', '🚀'] &&
+             data.reactedAtMillis is int && data.reactedAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function canReadSignalDoc(signalId) {
+      let sigPath = /databases/$(database)/documents/trade_signals/$(signalId);
+      return exists(sigPath) &&
+             (get(sigPath).data.audienceType == 'ALL_STUDENTS' ||
+              request.auth.uid in get(sigPath).data.selectedStudentIds);
+    }
+
+    function isValidLiveClassroom(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.roomName is string && data.roomName.size() >= 1 && data.roomName.size() <= 80 &&
+             data.isLive is bool &&
+             data.isScreenSharing is bool &&
+             data.hostUid is string && isValidId(data.hostUid) &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 80 &&
+             data.startedAtMillis is int && data.startedAtMillis >= 0 &&
+             data.endedAtMillis is int && data.endedAtMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidClassroomParticipant(data, participantUid) {
+      return data.uid is string && data.uid == participantUid && isValidId(data.uid) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.role in ['ADMIN', 'STUDENT'] &&
+             (!('profilePhotoUrl' in data) || (data.profilePhotoUrl is string && data.profilePhotoUrl.size() <= 1500)) &&
+             data.joinedAtMillis is int && data.joinedAtMillis > 0 &&
+             data.handRaised is bool &&
+             data.voiceApproved is bool &&
+             data.isMutedByTeacher is bool &&
+             data.isSelfMuted is bool &&
+             data.isRemoved is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidClassroomMessage(data, parentRoomId) {
+      return data.roomId is string && data.roomId == parentRoomId &&
+             data.senderId is string && isValidId(data.senderId) &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+             data.senderRole in ['ADMIN', 'STUDENT'] &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 1500 &&
+             data.sentAtMillis is int && data.sentAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
     // 2. User profiles (PII protected: owner or Admin only)
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
@@ -132,12 +363,15 @@ service cloud.firestore {
 
       allow create: if isSignedIn() && isValidId(userId) &&
                        incoming().keys().hasAll(['userId', 'name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'email', 'role', 'status', 'signalAccess', 'preferredCurrency', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'lastAnnouncementReadMillis', 'slAlertLookbackCount', 'slAlertThreshold', 'strategySlThreshold', 'breakRecommendedUntilMillis', 'mobileNumber', 'whatsappNumber', 'dateOfBirth', 'gender', 'fullAddress', 'profilePhotoUrl', 'profilePhotoPath', 'profileCompleted', 'createdAt', 'updatedAt']) &&
                        isValidUserProfile(incoming()) &&
                        incoming().userId == userId &&
                        (
                          isAdmin() ||
-                         (request.auth.uid == userId && incoming().role == 'STUDENT' && incoming().status == 'ACTIVE')
+                         (request.auth.uid == userId &&
+                          incoming().role == 'STUDENT' &&
+                          incoming().status == 'ACTIVE' &&
+                          (!('signalAccess' in incoming()) || incoming().signalAccess == 'ALLOWED'))
                        );
 
       allow update: if isSignedIn() && isValidId(userId) &&
@@ -145,13 +379,14 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'role', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt'])) ||
+                         (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'role', 'status', 'signalAccess', 'preferredCurrency', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'lastAnnouncementReadMillis', 'slAlertLookbackCount', 'slAlertThreshold', 'strategySlThreshold', 'breakRecommendedUntilMillis', 'mobileNumber', 'whatsappNumber', 'dateOfBirth', 'gender', 'fullAddress', 'profilePhotoUrl', 'profilePhotoPath', 'profileCompleted', 'updatedAt'])) ||
                          (request.auth.uid == userId &&
                           existing().status == 'ACTIVE' &&
                           incoming().role == existing().role &&
                           incoming().status == existing().status &&
+                          (!('signalAccess' in incoming()) || incoming().signalAccess == existing().get('signalAccess', 'ALLOWED')) &&
                           incoming().email == existing().email &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt']))
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'preferredCurrency', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'lastAnnouncementReadMillis', 'slAlertLookbackCount', 'slAlertThreshold', 'strategySlThreshold', 'breakRecommendedUntilMillis', 'mobileNumber', 'whatsappNumber', 'dateOfBirth', 'gender', 'fullAddress', 'profilePhotoUrl', 'profilePhotoPath', 'profileCompleted', 'updatedAt']))
                        );
 
       allow delete: if isAdmin() && isValidId(userId) && userId != request.auth.uid;
@@ -167,14 +402,14 @@ service cloud.firestore {
                      (isSignedIn() && 'email_verified' in request.auth.token && request.auth.token.email_verified == true && 'email' in request.auth.token && resource.data.email == request.auth.token.email);
       allow create: if isAdmin() && isValidId(inviteId) &&
                        incoming().keys().hasAll(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdByUid', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdByUid', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'email', 'status', 'preferredCurrency', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'createdByUid', 'createdAt', 'updatedAt']) &&
                        isValidStudentInvite(incoming()) &&
                        incoming().createdByUid == request.auth.uid;
       allow update: if isAdmin() && isValidId(inviteId) &&
                        isValidStudentInvite(incoming()) &&
                        incoming().createdByUid == existing().createdByUid &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'status', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'status', 'preferredCurrency', 'dailyProfitGoal', 'dailyMaxLossLimit', 'maxTradesPerDay', 'maxRiskPerTrade', 'updatedAt']);
       allow delete: if isAdmin() && isValidId(inviteId);
     }
 
@@ -185,7 +420,7 @@ service cloud.firestore {
 
       allow create: if isSignedIn() && isValidId(tradeId) &&
                        incoming().keys().hasAll(['tradeCode', 'userId', 'userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'notes', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['tradeCode', 'userId', 'userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['tradeCode', 'userId', 'userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'currency', 'usdToInrRate', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'fees', 'tradeStatus', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'entryTimeMillis', 'exitDateIso', 'exitTimeMillis', 'tradingSession', 'exitClosureType', 'timezoneId', 'createdAt', 'updatedAt']) &&
                        isValidTrade(incoming()) &&
                        (isAdmin() || (incoming().userId == request.auth.uid && isActiveUser()));
 
@@ -195,7 +430,7 @@ service cloud.firestore {
                        incoming().tradeCode == existing().tradeCode &&
                        incoming().createdAt == existing().createdAt &&
                        (isAdmin() || (existing().userId == request.auth.uid && isActiveUser())) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'tradeDateMillis', 'tradeDateIso', 'instrument', 'direction', 'timeframe', 'currency', 'usdToInrRate', 'entryPrice', 'exitPrice', 'stopLoss', 'takeProfit', 'lotSize', 'riskAmount', 'actualPnl', 'fees', 'tradeStatus', 'result', 'strategy', 'entryReason', 'exitReason', 'mistakes', 'lessonsLearned', 'screenshotData', 'notes', 'entryTimeMillis', 'exitDateIso', 'exitTimeMillis', 'tradingSession', 'exitClosureType', 'timezoneId', 'updatedAt']);
 
       allow delete: if isSignedIn() && isValidId(tradeId) && (isAdmin() || (existing().userId == request.auth.uid && isActiveUser()));
     }
@@ -219,6 +454,305 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly(['periodType', 'periodKey', 'emotionState', 'psychologyNotes', 'slAdherenceRating', 'lessonsSummary', 'nextActionPlan', 'updatedAt']);
 
       allow delete: if isSignedIn() && isValidId(reviewId) && (isAdmin() || (existing().userId == request.auth.uid && isActiveUser()));
+    }
+
+    // 6. Private 1:1 Student-Admin Direct Conversations & Messages
+    match /conversations/{studentUid} {
+      allow get: if isSignedIn() && isValidId(studentUid) && (isAdmin() || request.auth.uid == studentUid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.studentId == request.auth.uid);
+
+      allow create: if isSignedIn() && isValidId(studentUid) &&
+                       incoming().keys().hasAll(['studentId', 'studentName', 'studentEmail', 'lastMessageText', 'lastMessageSenderRole', 'lastMessageAtMillis', 'unreadByAdminCount', 'unreadByStudentCount', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['studentId', 'studentName', 'studentEmail', 'lastMessageText', 'lastMessageSenderRole', 'lastMessageAtMillis', 'unreadByAdminCount', 'unreadByStudentCount', 'createdAt', 'updatedAt']) &&
+                       isValidConversation(incoming()) &&
+                       incoming().studentId == studentUid &&
+                       (
+                         (isAdmin() && incoming().lastMessageSenderRole == 'ADMIN') ||
+                         (request.auth.uid == studentUid && isActiveUser() && incoming().lastMessageSenderRole == 'STUDENT' && incoming().unreadByStudentCount == 0)
+                       );
+
+      allow update: if isSignedIn() && isValidId(studentUid) &&
+                       isValidConversation(incoming()) &&
+                       incoming().studentId == existing().studentId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['studentName', 'studentEmail', 'lastMessageText', 'lastMessageSenderRole', 'lastMessageAtMillis', 'unreadByAdminCount', 'unreadByStudentCount', 'updatedAt']) &&
+                       (
+                         isAdmin() ||
+                         (request.auth.uid == studentUid &&
+                          isActiveUser() &&
+                          incoming().unreadByStudentCount == 0 &&
+                          (
+                            incoming().lastMessageSenderRole == 'STUDENT' ||
+                            (
+                              incoming().unreadByAdminCount == existing().unreadByAdminCount &&
+                              incoming().lastMessageText == existing().lastMessageText &&
+                              incoming().lastMessageSenderRole == existing().lastMessageSenderRole &&
+                              incoming().lastMessageAtMillis == existing().lastMessageAtMillis
+                            )
+                          ))
+                       );
+
+      allow delete: if isAdmin() && isValidId(studentUid);
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && isValidId(studentUid) && (isAdmin() || request.auth.uid == studentUid);
+
+        allow create: if isSignedIn() && isValidId(studentUid) && isValidId(messageId) &&
+                         incoming().keys().hasAll(['studentId', 'senderId', 'senderName', 'senderRole', 'body', 'sentAtMillis', 'createdAt']) &&
+                         incoming().keys().hasOnly(['studentId', 'senderId', 'senderName', 'senderRole', 'body', 'sentAtMillis', 'createdAt']) &&
+                         isValidDirectMessage(incoming()) &&
+                         incoming().studentId == studentUid &&
+                         incoming().senderId == request.auth.uid &&
+                         (
+                           (isAdmin() && incoming().senderRole == 'ADMIN') ||
+                           (request.auth.uid == studentUid && isActiveUser() && incoming().senderRole == 'STUDENT')
+                         );
+
+        allow update: if false;
+        allow delete: if isAdmin() && isValidId(studentUid) && isValidId(messageId);
+      }
+    }
+
+    // 7. Individual Student Warnings / Alerts sent by Admin
+    match /warnings/{warningId} {
+      allow get: if isSignedIn() && isValidId(warningId) && (isAdmin() || existing().studentId == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.studentId == request.auth.uid);
+
+      allow create: if isAdmin() && isValidId(warningId) &&
+                       incoming().keys().hasAll(['studentId', 'studentName', 'senderAdminId', 'senderAdminName', 'severity', 'title', 'message', 'readByStudent', 'sentAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['studentId', 'studentName', 'senderAdminId', 'senderAdminName', 'severity', 'title', 'message', 'readByStudent', 'sentAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidWarning(incoming()) &&
+                       incoming().senderAdminId == request.auth.uid &&
+                       incoming().readByStudent == false;
+
+      allow update: if isSignedIn() && isValidId(warningId) &&
+                       isValidWarning(incoming()) &&
+                       incoming().studentId == existing().studentId &&
+                       incoming().senderAdminId == existing().senderAdminId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['studentName', 'severity', 'title', 'message', 'readByStudent', 'updatedAt'])) ||
+                         (existing().studentId == request.auth.uid &&
+                          isActiveUser() &&
+                          incoming().readByStudent == true &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['readByStudent', 'updatedAt']))
+                       );
+
+      allow delete: if isAdmin() && isValidId(warningId);
+    }
+
+    // 8. Broadcast Announcements (Admin creates/deletes; active users can read)
+    match /announcements/{announcementId} {
+      allow get: if isSignedIn() && isValidId(announcementId) && (isAdmin() || isActiveUser());
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || isActiveUser());
+
+      allow create: if isAdmin() && isValidId(announcementId) &&
+                       incoming().keys().hasAll(['title', 'message', 'priority', 'authorId', 'authorName', 'publishedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['title', 'message', 'priority', 'authorId', 'authorName', 'publishedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidAnnouncement(incoming()) &&
+                       incoming().authorId == request.auth.uid;
+
+      allow update: if isAdmin() && isValidId(announcementId) &&
+                       isValidAnnouncement(incoming()) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'message', 'priority', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(announcementId);
+    }
+
+    // 9. Smart Discipline Alerts (Stop Loss streak & Strategy SL alerts; owner-private + Admin monitor)
+    match /smart_discipline_alerts/{alertId} {
+      allow get: if isSignedIn() && isValidId(alertId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn() && isValidId(alertId) &&
+                       incoming().keys().hasAll(['userId', 'userName', 'alertType', 'triggerKey', 'strategyName', 'stopLossCount', 'lookbackCount', 'recommendedBreakDays', 'title', 'message', 'acknowledged', 'acknowledgedAtMillis', 'triggeredAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'userName', 'alertType', 'triggerKey', 'strategyName', 'stopLossCount', 'lookbackCount', 'recommendedBreakDays', 'lossAmountUsd', 'lossAmountInr', 'exchangeRateUsed', 'triggerDateIso', 'resolved', 'title', 'message', 'acknowledged', 'acknowledgedAtMillis', 'triggeredAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidSmartDisciplineAlert(incoming()) &&
+                       (isAdmin() || (incoming().userId == request.auth.uid && isActiveUser()));
+
+      allow update: if isSignedIn() && isValidId(alertId) &&
+                       isValidSmartDisciplineAlert(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().alertType == existing().alertType &&
+                       incoming().triggerKey == existing().triggerKey &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isAdmin() || (existing().userId == request.auth.uid && isActiveUser())) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['stopLossCount', 'lookbackCount', 'recommendedBreakDays', 'lossAmountUsd', 'lossAmountInr', 'exchangeRateUsed', 'triggerDateIso', 'resolved', 'title', 'message', 'acknowledged', 'acknowledgedAtMillis', 'triggeredAtMillis', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(alertId);
+    }
+
+    // 10. Automated Weekly Performance & Mistake Analysis Reports (owner-private + Admin monitor)
+    match /weekly_reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn() && isValidId(reportId) &&
+                       incoming().keys().hasAll(['userId', 'userName', 'weekKey', 'weekStartIso', 'weekEndIso', 'currencyCode', 'totalTrades', 'winningTrades', 'losingTrades', 'breakEvenTrades', 'stopLossHits', 'netPnl', 'winRatePercent', 'disciplineScore', 'overtradingDays', 'revengeTradingCount', 'noStopLossCount', 'ruleViolationsCount', 'repeatedMistakes', 'poorStrategies', 'ruleViolationDetails', 'improvementAreas', 'personalizedSuggestions', 'summaryText', 'readByUser', 'generatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'userName', 'weekKey', 'weekStartIso', 'weekEndIso', 'currencyCode', 'totalTrades', 'winningTrades', 'losingTrades', 'breakEvenTrades', 'stopLossHits', 'netPnl', 'winRatePercent', 'disciplineScore', 'overtradingDays', 'revengeTradingCount', 'noStopLossCount', 'ruleViolationsCount', 'repeatedMistakes', 'poorStrategies', 'ruleViolationDetails', 'improvementAreas', 'personalizedSuggestions', 'summaryText', 'readByUser', 'generatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidWeeklyReport(incoming()) &&
+                       (isAdmin() || (incoming().userId == request.auth.uid && isActiveUser()));
+
+      allow update: if isSignedIn() && isValidId(reportId) &&
+                       isValidWeeklyReport(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().weekKey == existing().weekKey &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isAdmin() || (existing().userId == request.auth.uid && isActiveUser())) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'currencyCode', 'totalTrades', 'winningTrades', 'losingTrades', 'breakEvenTrades', 'stopLossHits', 'netPnl', 'winRatePercent', 'disciplineScore', 'overtradingDays', 'revengeTradingCount', 'noStopLossCount', 'ruleViolationsCount', 'repeatedMistakes', 'poorStrategies', 'ruleViolationDetails', 'improvementAreas', 'personalizedSuggestions', 'summaryText', 'readByUser', 'generatedAtMillis', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(reportId);
+    }
+
+    // 11. Dedicated Signal Access Permissions (independent from Account Suspension)
+    match /signal_access/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isAdmin() || request.auth.uid == userId);
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isAdmin() && isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'studentName', 'studentEmail', 'signalAccess', 'updatedByUid', 'updatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'studentName', 'studentEmail', 'signalAccess', 'updatedByUid', 'updatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidSignalAccessRecord(incoming(), userId);
+
+      allow update: if isAdmin() && isValidId(userId) &&
+                       isValidSignalAccessRecord(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['studentName', 'studentEmail', 'signalAccess', 'updatedByUid', 'updatedAtMillis', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // 12. Admin Trade Desk Signals & Student Emoji Reactions
+    match /trade_signals/{signalId} {
+      allow get: if isSignedIn() && isValidId(signalId) && (
+                    isAdmin() ||
+                    (hasSignalAccess() && (existing().audienceType == 'ALL_STUDENTS' || request.auth.uid in existing().selectedStudentIds))
+                  );
+      allow list: if isSignedIn() && (
+                    isBootstrappedAdmin() ||
+                    (hasSignalAccess() && (resource.data.audienceType == 'ALL_STUDENTS' || request.auth.uid in resource.data.selectedStudentIds))
+                  );
+
+      allow create: if isAdmin() && isValidId(signalId) &&
+                       incoming().keys().hasAll(['instrument', 'direction', 'entryPrice', 'stopLoss', 'target1', 'riskRewardRatio', 'strategyName', 'instructions', 'status', 'audienceType', 'selectedStudentIds', 'screenshotUrls', 'screenshotPaths', 'voiceNoteUrl', 'voiceNotePath', 'voiceDurationSec', 'authorId', 'authorName', 'createdAtMillis', 'updatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['instrument', 'direction', 'entryPrice', 'stopLoss', 'target1', 'target2', 'riskRewardRatio', 'strategyName', 'instructions', 'status', 'audienceType', 'selectedStudentIds', 'screenshotUrls', 'screenshotPaths', 'voiceNoteUrl', 'voiceNotePath', 'voiceDurationSec', 'authorId', 'authorName', 'createdAtMillis', 'updatedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidTradeSignal(incoming()) &&
+                       incoming().authorId == request.auth.uid;
+
+      allow update: if isAdmin() && isValidId(signalId) &&
+                       isValidTradeSignal(incoming()) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['instrument', 'direction', 'entryPrice', 'stopLoss', 'target1', 'target2', 'riskRewardRatio', 'strategyName', 'instructions', 'status', 'audienceType', 'selectedStudentIds', 'screenshotUrls', 'screenshotPaths', 'voiceNoteUrl', 'voiceNotePath', 'voiceDurationSec', 'updatedAtMillis', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(signalId);
+
+      match /reactions/{userId} {
+        allow get, list: if isSignedIn() && isValidId(signalId) && (
+                            isAdmin() ||
+                            (hasSignalAccess() && canReadSignalDoc(signalId))
+                          );
+
+        allow create: if isSignedIn() && isValidId(signalId) && isValidId(userId) &&
+                         request.auth.uid == userId &&
+                         hasSignalAccess() &&
+                         canReadSignalDoc(signalId) &&
+                         incoming().keys().hasAll(['signalId', 'userId', 'userName', 'emoji', 'reactedAtMillis', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['signalId', 'userId', 'userName', 'emoji', 'reactedAtMillis', 'createdAt', 'updatedAt']) &&
+                         isValidTradeSignalReaction(incoming(), signalId, userId);
+
+        allow update: if isSignedIn() && isValidId(signalId) && isValidId(userId) &&
+                         request.auth.uid == userId &&
+                         hasSignalAccess() &&
+                         canReadSignalDoc(signalId) &&
+                         isValidTradeSignalReaction(incoming(), signalId, userId) &&
+                         incoming().signalId == existing().signalId &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'emoji', 'reactedAtMillis', 'updatedAt']);
+
+        allow delete: if isSignedIn() && isValidId(signalId) && isValidId(userId) && (
+                          isAdmin() ||
+                          (request.auth.uid == userId && hasSignalAccess())
+                        );
+      }
+    }
+
+    // 13. Live Online Classroom (session metadata, participant mic moderation, and live text chat)
+    match /live_classrooms/{roomId} {
+      allow get, list: if isSignedIn() && (isAdmin() || isActiveUser());
+
+      allow create: if isAdmin() && isValidId(roomId) &&
+                       incoming().keys().hasAll(['title', 'roomName', 'isLive', 'isScreenSharing', 'hostUid', 'hostName', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['title', 'roomName', 'isLive', 'isScreenSharing', 'hostUid', 'hostName', 'startedAtMillis', 'endedAtMillis', 'createdAt', 'updatedAt']) &&
+                       isValidLiveClassroom(incoming()) &&
+                       incoming().hostUid == request.auth.uid;
+
+      allow update: if isAdmin() && isValidId(roomId) &&
+                       isValidLiveClassroom(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'roomName', 'isLive', 'isScreenSharing', 'hostUid', 'hostName', 'startedAtMillis', 'endedAtMillis', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(roomId);
+
+      match /participants/{participantUid} {
+        allow get, list: if isSignedIn() && isValidId(roomId) && (isAdmin() || isActiveUser());
+
+        allow create: if isSignedIn() && isValidId(roomId) && isValidId(participantUid) &&
+                         incoming().keys().hasAll(['uid', 'name', 'role', 'joinedAtMillis', 'handRaised', 'voiceApproved', 'isMutedByTeacher', 'isSelfMuted', 'isRemoved', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['uid', 'name', 'role', 'profilePhotoUrl', 'joinedAtMillis', 'handRaised', 'voiceApproved', 'isMutedByTeacher', 'isSelfMuted', 'isRemoved', 'createdAt', 'updatedAt']) &&
+                         isValidClassroomParticipant(incoming(), participantUid) &&
+                         (
+                           isAdmin() ||
+                           (request.auth.uid == participantUid &&
+                            isActiveUser() &&
+                            incoming().role == 'STUDENT' &&
+                            incoming().voiceApproved == false &&
+                            incoming().isMutedByTeacher == true &&
+                            incoming().isRemoved == false)
+                         );
+
+        allow update: if isSignedIn() && isValidId(roomId) && isValidId(participantUid) &&
+                         isValidClassroomParticipant(incoming(), participantUid) &&
+                         incoming().uid == existing().uid &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           isAdmin() ||
+                           (request.auth.uid == participantUid &&
+                            isActiveUser() &&
+                            existing().isRemoved == false &&
+                            incoming().role == existing().role &&
+                            incoming().voiceApproved == existing().voiceApproved &&
+                            incoming().isMutedByTeacher == existing().isMutedByTeacher &&
+                            incoming().isRemoved == existing().isRemoved &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'profilePhotoUrl', 'joinedAtMillis', 'handRaised', 'isSelfMuted', 'updatedAt']))
+                         );
+
+        allow delete: if isSignedIn() && isValidId(roomId) && isValidId(participantUid) && (
+                          isAdmin() ||
+                          request.auth.uid == participantUid
+                        );
+      }
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && isValidId(roomId) && (isAdmin() || isActiveUser());
+
+        allow create: if isSignedIn() && isValidId(roomId) && isValidId(messageId) &&
+                         incoming().keys().hasAll(['roomId', 'senderId', 'senderName', 'senderRole', 'body', 'sentAtMillis', 'createdAt']) &&
+                         incoming().keys().hasOnly(['roomId', 'senderId', 'senderName', 'senderRole', 'body', 'sentAtMillis', 'createdAt']) &&
+                         isValidClassroomMessage(incoming(), roomId) &&
+                         incoming().senderId == request.auth.uid &&
+                         (
+                           (isAdmin() && incoming().senderRole == 'ADMIN') ||
+                           (isActiveUser() && incoming().senderRole == 'STUDENT')
+                         );
+
+        allow update: if false;
+        allow delete: if isAdmin() && isValidId(roomId) && isValidId(messageId);
+      }
     }
   }
 }

@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.AccountStatus
@@ -7,9 +8,11 @@ import com.example.data.model.Timeframe
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
 import com.example.data.model.TradeResult
+import com.example.data.model.TradingCurrency
 import com.example.data.model.UserEntity
 import com.example.data.model.UserRole
 import com.example.export.ReportExporter
+import com.example.notifications.TradingNotificationHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,7 +47,8 @@ class ExampleRobolectricTest {
             name = "Bangali Babu",
             email = "tradingwithbengalibabu@gmail.com",
             role = UserRole.ADMIN.name,
-            status = AccountStatus.ACTIVE.name
+            status = AccountStatus.ACTIVE.name,
+            preferredCurrency = TradingCurrency.INR.name
         )
         val student = UserEntity(
             id = "student_uid",
@@ -52,13 +56,16 @@ class ExampleRobolectricTest {
             name = "Alice",
             email = "alice@twbb.com",
             role = UserRole.STUDENT.name,
-            status = AccountStatus.SUSPENDED.name
+            status = AccountStatus.SUSPENDED.name,
+            preferredCurrency = TradingCurrency.USD.name
         )
 
         assertTrue(admin.roleEnum == UserRole.ADMIN)
         assertFalse(admin.statusEnum == AccountStatus.SUSPENDED)
+        assertEquals(TradingCurrency.INR, admin.preferredCurrencyEnum)
         assertFalse(student.roleEnum == UserRole.ADMIN)
         assertTrue(student.statusEnum == AccountStatus.SUSPENDED)
+        assertEquals(TradingCurrency.USD, student.preferredCurrencyEnum)
 
         val trade = TradeEntity(
             id = "trade_1",
@@ -70,13 +77,15 @@ class ExampleRobolectricTest {
             instrument = "NIFTY 50",
             direction = TradeDirection.BUY.name,
             timeframe = Timeframe.M15.name,
+            currency = TradingCurrency.INR.name,
+            usdToInrRate = 84.50,
             entryPrice = 24000.0,
             exitPrice = 24080.0,
             stopLoss = 23960.0,
             takeProfit = 24120.0,
             lotSize = 1.0,
-            riskAmount = 40.0,
-            actualPnl = 160.0,
+            riskAmount = 4225.0,
+            actualPnl = 8450.0,
             result = TradeResult.WIN.name,
             strategy = "Breakout",
             entryReason = "VWAP reclaim",
@@ -88,9 +97,22 @@ class ExampleRobolectricTest {
         )
 
         val csvOut = ByteArrayOutputStream()
-        ReportExporter.writeCsvReport(csvOut, listOf(trade))
+        ReportExporter.writeCsvReport(csvOut, listOf(trade), TradingCurrency.USD)
         val csvText = csvOut.toString(Charsets.UTF_8.name())
         assertTrue(csvText.contains("TWBB-0001"))
         assertTrue(csvText.contains("NIFTY 50"))
+        assertTrue(csvText.contains("INR"))
+        assertTrue(csvText.contains("100.00"))
+    }
+
+    @Test
+    fun notificationHelperRegistersCommunicationChannels() {
+        TradingNotificationHelper.ensureChannels(context)
+        val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelIds = mgr.notificationChannels.map { it.id }.toSet()
+        assertTrue(channelIds.contains("twbb_messages"))
+        assertTrue(channelIds.contains("twbb_warnings"))
+        assertTrue(channelIds.contains("twbb_announcements"))
+        assertTrue(channelIds.contains("twbb_weekly_reports"))
     }
 }

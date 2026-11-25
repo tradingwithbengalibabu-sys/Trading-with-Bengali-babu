@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoGraph
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Download
@@ -50,13 +51,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.local.CustomTradingSession
+import com.example.data.model.AnalysisPeriodType
 import com.example.data.model.ReportRangeType
 import com.example.data.model.TradeEntity
+import com.example.data.model.TradingCurrency
 import com.example.data.model.UserEntity
 import com.example.data.model.UserRole
+import com.example.domain.AdvancedTradeAnalytics
+import com.example.domain.PeriodPerformanceReport
+import com.example.domain.TradeDateTimeHelper
 import com.example.domain.TradingAnalytics
 import com.example.export.ReportExporter
+import com.example.ui.components.DisplayCurrencySelectorBar
 import com.example.ui.components.GradientButton
 import com.example.ui.components.GradientKpiCard
 import com.example.ui.theme.LocalTradingColors
@@ -75,8 +84,16 @@ fun ReportsScreen(
     personalTrades: List<TradeEntity>,
     students: List<UserEntity>,
     allPlatformTrades: List<TradeEntity>,
+    displayCurrency: TradingCurrency,
+    liveUsdToInrRate: Double,
+    isRefreshingRate: Boolean,
+    selectedTimezoneId: String = TradeDateTimeHelper.DEFAULT_TIMEZONE_ID,
+    customSessions: List<CustomTradingSession> = CustomTradingSession.DEFAULT_SESSIONS,
+    onSelectDisplayCurrency: (TradingCurrency) -> Unit,
+    onRefreshRate: () -> Unit,
     onExportBackupJson: suspend () -> Result<String>,
     onRestoreBackupJson: (String) -> Unit,
+    onOpenDeepAnalytics: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -138,7 +155,68 @@ fun ReportsScreen(
     val filteredTrades = remember(sourceTrades, startIso, endIso) {
         sourceTrades.filter { it.tradeDateIso >= startIso && it.tradeDateIso <= endIso }
     }
-    val metrics = remember(filteredTrades) { TradingAnalytics.calculateDashboardMetrics(filteredTrades) }
+    val metrics = remember(filteredTrades, displayCurrency) {
+        TradingAnalytics.calculateDashboardMetrics(filteredTrades, displayCurrency)
+    }
+
+    val periodHighlights: PeriodPerformanceReport = remember(
+        filteredTrades, rangeType, displayCurrency, selectedTimezoneId, customSessions
+    ) {
+        val periodType = when (rangeType) {
+            ReportRangeType.DAILY -> AnalysisPeriodType.DAILY
+            ReportRangeType.WEEKLY -> AnalysisPeriodType.WEEKLY
+            ReportRangeType.MONTHLY, ReportRangeType.CUSTOM -> AnalysisPeriodType.MONTHLY
+        }
+        val base = AdvancedTradeAnalytics.buildPeriodReport(
+            trades = sourceTrades,
+            periodType = periodType,
+            anchorMillis = System.currentTimeMillis(),
+            displayCurrency = displayCurrency,
+            timezoneId = selectedTimezoneId,
+            customSessions = customSessions
+        )
+        if (rangeType == ReportRangeType.CUSTOM) {
+            val customEnriched = AdvancedTradeAnalytics.enrichTrades(
+                filteredTrades, displayCurrency, selectedTimezoneId, customSessions
+            )
+            val customMetrics = TradingAnalytics.calculateDashboardMetrics(filteredTrades, displayCurrency)
+            val timeGroups = customEnriched.filter { it.entryHour != null }
+                .groupBy { String.format(Locale.US, "%02d:00–%02d:59", it.entryHour, it.entryHour) }
+                .mapValues { (_, list) -> list.sumOf { it.convertedPnl } }
+            val instGroups = customEnriched.groupBy { it.trade.instrument.ifBlank { "OTHER" } }
+                .mapValues { (_, list) -> list.sumOf { it.convertedPnl } }
+            val stratGroups = customEnriched.groupBy { it.trade.strategy.ifBlank { "General" } }
+                .mapValues { (_, list) -> list.sumOf { it.convertedPnl } }
+            val tfGroups = customEnriched.groupBy { it.trade.timeframeEnum.label }
+                .mapValues { (_, list) -> list.sumOf { it.convertedPnl } }
+            base.copy(
+                periodTitle = "Custom Report • $startIso to $endIso",
+                dateRangeIso = "$startIso to $endIso",
+                totalTrades = customMetrics.totalTrades,
+                winningTrades = customMetrics.winningTrades,
+                losingTrades = customMetrics.losingTrades,
+                breakEvenTrades = customMetrics.breakEvenTrades,
+                winRatePercent = customMetrics.winRatePercent,
+                grossProfit = customMetrics.totalProfit,
+                grossLoss = customMetrics.totalLoss,
+                netPnl = customMetrics.netPnl,
+                averageWin = customMetrics.averageWin,
+                averageLoss = customMetrics.averageLoss,
+                bestTradingTime = timeGroups.maxByOrNull { it.value }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "No timed trades",
+                worstTradingTime = timeGroups.minByOrNull { it.value }?.takeIf { timeGroups.size > 1 || it.value < 0 }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                bestInstrument = instGroups.maxByOrNull { it.value }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                worstInstrument = instGroups.minByOrNull { it.value }?.takeIf { instGroups.size > 1 || it.value < 0 }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                bestStrategy = stratGroups.maxByOrNull { it.value }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                worstStrategy = stratGroups.minByOrNull { it.value }?.takeIf { stratGroups.size > 1 || it.value < 0 }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                bestTimeframe = tfGroups.maxByOrNull { it.value }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                worstTimeframe = tfGroups.minByOrNull { it.value }?.takeIf { tfGroups.size > 1 || it.value < 0 }?.let { "${it.key} (${TradingAnalytics.formatCurrency(it.value, displayCurrency)})" } ?: "N/A",
+                dashboardMetrics = customMetrics,
+                trades = customEnriched
+            )
+        } else {
+            base
+        }
+    }
 
     // SAF Document Launchers
     val savePdfLauncher = rememberLauncherForActivityResult(
@@ -156,7 +234,9 @@ fun ReportsScreen(
                                 traderLabel = traderLabel,
                                 dateRangeLabel = "$startIso to $endIso",
                                 metrics = metrics,
-                                trades = filteredTrades
+                                trades = filteredTrades,
+                                periodHighlights = periodHighlights,
+                                timezoneId = selectedTimezoneId
                             )
                         } ?: error("Cannot open output stream.")
                     }
@@ -174,7 +254,12 @@ fun ReportsScreen(
                 runCatching {
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
-                            ReportExporter.writeCsvReport(out, filteredTrades)
+                            ReportExporter.writePeriodAnalyticsCsvReport(
+                                outputStream = out,
+                                report = periodHighlights,
+                                traderLabel = traderLabel,
+                                timezoneId = selectedTimezoneId
+                            )
                         } ?: error("Cannot open output stream.")
                     }
                 }.onSuccess { onShowMessage("CSV / Excel report saved.") }
@@ -238,9 +323,16 @@ fun ReportsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Trading Reports & Exports", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            text = "Generate branded PDF and Excel-compatible CSV reports directly from verified cloud trades.",
+                            text = "Generate branded PDF and Excel-compatible CSV reports with both original and converted ${displayCurrency.code} amounts.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        DisplayCurrencySelectorBar(
+                            selectedCurrency = displayCurrency,
+                            onSelectCurrency = onSelectDisplayCurrency,
+                            liveUsdToInrRate = liveUsdToInrRate,
+                            isRefreshingRate = isRefreshingRate,
+                            onRefreshRate = onRefreshRate
                         )
 
                         if (currentUser.roleEnum == UserRole.ADMIN) {
@@ -315,8 +407,8 @@ fun ReportsScreen(
                 // Live Preview Metrics
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GradientKpiCard(
-                        title = "Period Net P&L",
-                        value = TradingAnalytics.formatCurrency(metrics.netPnl),
+                        title = "Period Net P&L (${displayCurrency.code})",
+                        value = TradingAnalytics.formatCurrency(metrics.netPnl, displayCurrency),
                         subtitle = "${metrics.totalTrades} Trades • ${String.format(Locale.US, "%.1f%%", metrics.winRatePercent)} WR",
                         icon = Icons.Rounded.PictureAsPdf,
                         gradientColors = listOf(
@@ -335,6 +427,43 @@ fun ReportsScreen(
                         accentColor = ext.purple,
                         modifier = Modifier.weight(1f)
                     )
+                }
+
+                // Period Performance Breakdown Card (Daily / Weekly / Monthly Highlights)
+                Card(
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(containerColor = ext.cardSurface),
+                    border = BorderStroke(1.dp, ext.electricBlue.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().testTag("period_highlights_card")
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${periodHighlights.periodTitle} Highlights",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = ext.gold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = onOpenDeepAnalytics, modifier = Modifier.testTag("reports_open_deep_analytics")) {
+                                Icon(Icons.Rounded.AutoGraph, contentDescription = null, modifier = Modifier.padding(end = 4.dp))
+                                Text("Time & Calendar")
+                            }
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Gross Profit: ${TradingAnalytics.formatPlainCurrency(periodHighlights.grossProfit, displayCurrency)}", style = MaterialTheme.typography.bodySmall, color = ext.profit)
+                            Text("Gross Loss: ${TradingAnalytics.formatPlainCurrency(periodHighlights.grossLoss, displayCurrency)}", style = MaterialTheme.typography.bodySmall, color = ext.loss)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Avg Win: ${TradingAnalytics.formatPlainCurrency(periodHighlights.averageWin, displayCurrency)}", style = MaterialTheme.typography.bodySmall)
+                            Text("Avg Loss: ${TradingAnalytics.formatPlainCurrency(periodHighlights.averageLoss, displayCurrency)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        HorizontalDivider(color = ext.cardBorder)
+                        Text("Best Trading Time: ${periodHighlights.bestTradingTime}", style = MaterialTheme.typography.bodySmall, color = ext.profit)
+                        Text("Worst Trading Time: ${periodHighlights.worstTradingTime}", style = MaterialTheme.typography.bodySmall, color = ext.loss)
+                        Text("Best Index/Instrument: ${periodHighlights.bestInstrument}  |  Worst: ${periodHighlights.worstInstrument}", style = MaterialTheme.typography.bodySmall)
+                        Text("Best Strategy: ${periodHighlights.bestStrategy}  |  Worst: ${periodHighlights.worstStrategy}", style = MaterialTheme.typography.bodySmall)
+                        Text("Best Timeframe: ${periodHighlights.bestTimeframe}  |  Worst: ${periodHighlights.worstTimeframe}", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
 
                 // Export Actions Card
@@ -371,7 +500,9 @@ fun ReportsScreen(
                                                         traderLabel = traderLabel,
                                                         dateRangeLabel = "$startIso to $endIso",
                                                         metrics = metrics,
-                                                        trades = filteredTrades
+                                                        trades = filteredTrades,
+                                                        periodHighlights = periodHighlights,
+                                                        timezoneId = selectedTimezoneId
                                                     )
                                                 }
                                             }
@@ -407,7 +538,12 @@ fun ReportsScreen(
                                                     context = context,
                                                     fileName = "TWBB_Trades_${startIso}_${endIso}.csv"
                                                 ) { out ->
-                                                    ReportExporter.writeCsvReport(out, filteredTrades)
+                                                    ReportExporter.writePeriodAnalyticsCsvReport(
+                                                        outputStream = out,
+                                                        report = periodHighlights,
+                                                        traderLabel = traderLabel,
+                                                        timezoneId = selectedTimezoneId
+                                                    )
                                                 }
                                             }
                                         }.onSuccess { intent ->

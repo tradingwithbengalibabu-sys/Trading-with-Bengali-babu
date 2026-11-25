@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.model.TradingCurrency
 import com.example.domain.CategoryPerformance
 import com.example.domain.DayPnlSummary
 import com.example.domain.EquityPoint
@@ -103,13 +104,17 @@ fun ChartCardContainer(
 }
 
 @Composable
-fun DailyPnlBarChart(series: List<DayPnlSummary>, modifier: Modifier = Modifier) {
+fun DailyPnlBarChart(
+    series: List<DayPnlSummary>,
+    displayCurrency: TradingCurrency = TradingCurrency.USD,
+    modifier: Modifier = Modifier
+) {
     val ext = LocalTradingColors.current
     val visible = series.takeLast(14)
     var selectedIdx by remember(visible) { mutableIntStateOf(visible.lastIndex) }
 
     ChartCardContainer(
-        title = "Daily Profit & Loss",
+        title = "Daily Profit & Loss (${displayCurrency.code})",
         subtitle = "Tap any bar to inspect daily net P&L",
         accentColor = ext.electricBlue,
         modifier = modifier,
@@ -119,7 +124,7 @@ fun DailyPnlBarChart(series: List<DayPnlSummary>, modifier: Modifier = Modifier)
                 val c = if (item.netPnl >= 0) ext.profit else ext.loss
                 Surface(color = c.copy(alpha = 0.14f), shape = RoundedCornerShape(8.dp)) {
                     Text(
-                        text = "${item.dateIso.takeLast(5)}: ${TradingAnalytics.formatCurrency(item.netPnl)}",
+                        text = "${item.dateIso.takeLast(5)}: ${TradingAnalytics.formatCurrency(item.netPnl, displayCurrency)}",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = c,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -187,12 +192,16 @@ fun DailyPnlBarChart(series: List<DayPnlSummary>, modifier: Modifier = Modifier)
 }
 
 @Composable
-fun EquityCurveChart(curve: List<EquityPoint>, modifier: Modifier = Modifier) {
+fun EquityCurveChart(
+    curve: List<EquityPoint>,
+    displayCurrency: TradingCurrency = TradingCurrency.USD,
+    modifier: Modifier = Modifier
+) {
     val ext = LocalTradingColors.current
     var selectedIdx by remember(curve) { mutableIntStateOf(curve.lastIndex) }
 
     ChartCardContainer(
-        title = "Trading History Equity Curve",
+        title = "Trading History Equity Curve (${displayCurrency.code})",
         subtitle = "Cumulative account P&L progression",
         accentColor = ext.gold,
         modifier = modifier,
@@ -202,7 +211,7 @@ fun EquityCurveChart(curve: List<EquityPoint>, modifier: Modifier = Modifier) {
                 val c = if (pt.cumulativePnl >= 0) ext.profit else ext.loss
                 Surface(color = c.copy(alpha = 0.14f), shape = RoundedCornerShape(8.dp)) {
                     Text(
-                        text = "${pt.tradeCode}: ${TradingAnalytics.formatCurrency(pt.cumulativePnl)}",
+                        text = "${pt.tradeCode}: ${TradingAnalytics.formatCurrency(pt.cumulativePnl, displayCurrency)}",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = c,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -299,7 +308,7 @@ fun EquityCurveChart(curve: List<EquityPoint>, modifier: Modifier = Modifier) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Date: ${pt.dateIso}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        "Trade P&L: ${TradingAnalytics.formatCurrency(pt.tradePnl)}",
+                        "Trade P&L: ${TradingAnalytics.formatCurrency(pt.tradePnl, displayCurrency)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (pt.tradePnl >= 0) ext.profit else ext.loss
                     )
@@ -423,13 +432,17 @@ private fun LegendStatRow(label: String, count: Int, total: Int, color: Color) {
 }
 
 @Composable
-fun MonthlyPerformanceChart(series: List<MonthlyPnlSummary>, modifier: Modifier = Modifier) {
+fun MonthlyPerformanceChart(
+    series: List<MonthlyPnlSummary>,
+    displayCurrency: TradingCurrency = TradingCurrency.USD,
+    modifier: Modifier = Modifier
+) {
     val ext = LocalTradingColors.current
     val visible = series.takeLast(6)
     var selectedIdx by remember(visible) { mutableIntStateOf(visible.lastIndex) }
 
     ChartCardContainer(
-        title = "Monthly Performance",
+        title = "Monthly Performance (${displayCurrency.code})",
         subtitle = "Gross profit vs gross loss by month",
         accentColor = ext.teal,
         modifier = modifier,
@@ -439,7 +452,7 @@ fun MonthlyPerformanceChart(series: List<MonthlyPnlSummary>, modifier: Modifier 
                 val c = if (m.netPnl >= 0) ext.profit else ext.loss
                 Surface(color = c.copy(alpha = 0.14f), shape = RoundedCornerShape(8.dp)) {
                     Text(
-                        text = "${m.label}: ${TradingAnalytics.formatCurrency(m.netPnl)}",
+                        text = "${m.label}: ${TradingAnalytics.formatCurrency(m.netPnl, displayCurrency)}",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = c,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -512,6 +525,7 @@ fun CategoryBreakdownChart(
     subtitle: String,
     accentColor: Color,
     items: List<CategoryPerformance>,
+    displayCurrency: TradingCurrency = TradingCurrency.USD,
     modifier: Modifier = Modifier
 ) {
     val ext = LocalTradingColors.current
@@ -542,7 +556,7 @@ fun CategoryBreakdownChart(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = TradingAnalytics.formatCurrency(item.netPnl),
+                                text = TradingAnalytics.formatCurrency(item.netPnl, displayCurrency),
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = barColor
                             )

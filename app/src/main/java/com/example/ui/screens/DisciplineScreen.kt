@@ -47,11 +47,18 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.DisciplineReviewEntity
 import com.example.data.model.EmotionState
 import com.example.data.model.ReviewPeriod
+import com.example.data.model.SmartDisciplineAlertEntity
+import com.example.data.model.TradingCurrency
 import com.example.data.model.UserEntity
+import com.example.data.model.WeeklyReportEntity
 import com.example.domain.DisciplineMetrics
 import com.example.domain.TradingAnalytics
+import com.example.ui.components.ActiveBreakCooldownCard
+import com.example.ui.components.FlashingSmartAlertBanner
 import com.example.ui.components.GradientButton
 import com.example.ui.components.GradientKpiCard
+import com.example.ui.components.SmartAlertHistoryItem
+import com.example.ui.components.WeeklyPerformanceReportCard
 import com.example.ui.theme.LocalTradingColors
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -62,8 +69,21 @@ import java.util.Locale
 fun DisciplineScreen(
     user: UserEntity,
     discipline: DisciplineMetrics,
+    displayCurrency: TradingCurrency,
     reviews: List<DisciplineReviewEntity>,
-    onUpdateGoals: (dailyGoal: Double, dailyMaxLoss: Double, maxTradesPerDay: Int, maxRiskPerTrade: Double) -> Unit,
+    smartAlerts: List<SmartDisciplineAlertEntity> = emptyList(),
+    weeklyReports: List<WeeklyReportEntity> = emptyList(),
+    liveCurrentWeekReport: WeeklyReportEntity? = null,
+    onUpdateGoals: (
+        preferredCurrency: TradingCurrency,
+        dailyGoal: Double,
+        dailyMaxLoss: Double,
+        maxTradesPerDay: Int,
+        maxRiskPerTrade: Double,
+        slLookbackCount: Int,
+        slAlertThreshold: Int,
+        strategySlThreshold: Int
+    ) -> Unit,
     onSaveReview: (
         periodType: ReviewPeriod,
         periodKey: String,
@@ -73,14 +93,21 @@ fun DisciplineScreen(
         lessonsSummary: String,
         nextActionPlan: String
     ) -> Unit,
+    onAcknowledgeSmartAlert: (SmartDisciplineAlertEntity, Int) -> Unit = { _, _ -> },
+    onMarkWeeklyReportRead: (WeeklyReportEntity) -> Unit = {},
+    onSaveCurrentWeekReportNow: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val ext = LocalTradingColors.current
 
+    var preferredCurrency by remember(user) { mutableStateOf(user.preferredCurrencyEnum) }
     var dailyGoal by remember(user) { mutableStateOf(user.dailyProfitGoal.toString()) }
     var dailyMaxLoss by remember(user) { mutableStateOf(user.dailyMaxLossLimit.toString()) }
     var maxTrades by remember(user) { mutableStateOf(user.maxTradesPerDay.toString()) }
     var maxRisk by remember(user) { mutableStateOf(user.maxRiskPerTrade.toString()) }
+    var slLookback by remember(user) { mutableStateOf(user.effectiveSlLookbackCount.toString()) }
+    var slThreshold by remember(user) { mutableStateOf(user.effectiveSlAlertThreshold.toString()) }
+    var strategySlThreshold by remember(user) { mutableStateOf(user.effectiveStrategySlThreshold.toString()) }
 
     val nowCal = remember { Calendar.getInstance() }
     val defaultWeekKey = remember {
@@ -116,6 +143,15 @@ fun DisciplineScreen(
                 modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                smartAlerts.filter { !it.acknowledged }.forEach { alert ->
+                    FlashingSmartAlertBanner(
+                        alert = alert,
+                        onAcknowledge = { days -> onAcknowledgeSmartAlert(alert, days) }
+                    )
+                }
+
+                ActiveBreakCooldownCard(untilMillis = user.breakRecommendedUntilMillis)
+
                 // Live Discipline KPI Cards
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GradientKpiCard(
@@ -148,17 +184,17 @@ fun DisciplineScreen(
                     border = BorderStroke(1.dp, ext.cardBorder)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Risk Management & Daily Limits", style = MaterialTheme.typography.titleMedium)
+                        Text("Risk Management & Daily Limits (${displayCurrency.code})", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "Today's Net P&L: ${TradingAnalytics.formatCurrency(discipline.todayNetPnl)}  •  Avg Risk/Trade: ${TradingAnalytics.formatPlainCurrency(discipline.averageRiskAmount)}",
+                            text = "Today's Net P&L: ${TradingAnalytics.formatCurrency(discipline.todayNetPnl, displayCurrency)}  •  Avg Risk/Trade: ${TradingAnalytics.formatPlainCurrency(discipline.averageRiskAmount, displayCurrency)}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (discipline.todayNetPnl >= 0) ext.profit else ext.loss
                         )
-                        val goalProgress = if (user.dailyProfitGoal > 0) {
-                            (discipline.todayNetPnl / user.dailyProfitGoal).toFloat().coerceIn(0f, 1f)
+                        val goalProgress = if (discipline.convertedDailyGoal > 0) {
+                            (discipline.todayNetPnl / discipline.convertedDailyGoal).toFloat().coerceIn(0f, 1f)
                         } else 0f
                         Text(
-                            "Daily Goal Progress (${TradingAnalytics.formatPlainCurrency(user.dailyProfitGoal)})",
+                            "Daily Goal Progress (${TradingAnalytics.formatPlainCurrency(discipline.convertedDailyGoal, displayCurrency)})",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -176,11 +212,23 @@ fun DisciplineScreen(
 
                         HorizontalDivider(color = ext.cardBorder)
 
+                        Text("Limit Base Currency", style = MaterialTheme.typography.labelMedium)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TradingCurrency.entries.forEach { curr ->
+                                FilterChip(
+                                    selected = preferredCurrency == curr,
+                                    onClick = { preferredCurrency = curr },
+                                    label = { Text(curr.label) },
+                                    modifier = Modifier.weight(1f).testTag("discipline_currency_${curr.code}")
+                                )
+                            }
+                        }
+
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(
                                 value = dailyGoal,
                                 onValueChange = { dailyGoal = it },
-                                label = { Text("Daily Goal ($)") },
+                                label = { Text("Daily Goal (${preferredCurrency.symbol})") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
@@ -188,7 +236,7 @@ fun DisciplineScreen(
                             OutlinedTextField(
                                 value = dailyMaxLoss,
                                 onValueChange = { dailyMaxLoss = it },
-                                label = { Text("Daily Max Loss ($)") },
+                                label = { Text("Daily Max Loss (${preferredCurrency.symbol})") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
@@ -206,21 +254,56 @@ fun DisciplineScreen(
                             OutlinedTextField(
                                 value = maxRisk,
                                 onValueChange = { maxRisk = it },
-                                label = { Text("Max Risk/Trade ($)") },
+                                label = { Text("Max Risk/Trade (${preferredCurrency.symbol})") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
                         }
+                        Text("Smart Stop-Loss & Strategy Alert Thresholds", style = MaterialTheme.typography.labelMedium, color = ext.gold)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = slLookback,
+                                onValueChange = { slLookback = it },
+                                label = { Text("SL Window") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("sl_lookback_input")
+                            )
+                            OutlinedTextField(
+                                value = slThreshold,
+                                onValueChange = { slThreshold = it },
+                                label = { Text("SL Streak Limit") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("sl_threshold_input")
+                            )
+                            OutlinedTextField(
+                                value = strategySlThreshold,
+                                onValueChange = { strategySlThreshold = it },
+                                label = { Text("Strategy SL >") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("strategy_sl_threshold_input")
+                            )
+                        }
+
                         GradientButton(
-                            text = "Save Discipline Limits",
+                            text = "Save Discipline Limits & Alert Rules (${preferredCurrency.code})",
                             icon = Icons.Rounded.Save,
                             onClick = {
+                                val lookbackVal = (slLookback.toIntOrNull() ?: user.effectiveSlLookbackCount).coerceIn(2, 50)
+                                val slThreshVal = (slThreshold.toIntOrNull() ?: user.effectiveSlAlertThreshold).coerceIn(2, lookbackVal)
+                                val stratThreshVal = (strategySlThreshold.toIntOrNull() ?: user.effectiveStrategySlThreshold).coerceIn(1, 50)
                                 onUpdateGoals(
+                                    preferredCurrency,
                                     dailyGoal.toDoubleOrNull() ?: user.dailyProfitGoal,
                                     dailyMaxLoss.toDoubleOrNull() ?: user.dailyMaxLossLimit,
                                     maxTrades.toIntOrNull() ?: user.maxTradesPerDay,
-                                    maxRisk.toDoubleOrNull() ?: user.maxRiskPerTrade
+                                    maxRisk.toDoubleOrNull() ?: user.maxRiskPerTrade,
+                                    lookbackVal,
+                                    slThreshVal,
+                                    stratThreshVal
                                 )
                             },
                             modifier = Modifier.fillMaxWidth().testTag("save_discipline_limits_button")
@@ -264,6 +347,47 @@ fun DisciplineScreen(
                                 }
                             }
                         }
+                    }
+                }
+
+                // Weekly Mistake Analysis & Automated Weekly Reports
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Weekly Performance & Mistake Analysis",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    if (liveCurrentWeekReport != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = onSaveCurrentWeekReportNow,
+                            modifier = Modifier.testTag("save_current_week_report_button")
+                        ) {
+                            Text("Save Week Snapshot", color = ext.gold)
+                        }
+                    }
+                }
+
+                if (liveCurrentWeekReport != null) {
+                    WeeklyPerformanceReportCard(
+                        report = liveCurrentWeekReport,
+                        isLiveCurrentWeek = true,
+                        expandedByDefault = true
+                    )
+                } else {
+                    Card(
+                        shape = MaterialTheme.shapes.medium,
+                        colors = CardDefaults.cardColors(containerColor = ext.cardSurface),
+                        border = BorderStroke(1.dp, ext.cardBorder)
+                    ) {
+                        Text(
+                            text = "No trades logged in the current week yet. Completed weekly reports generate automatically at week end.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(14.dp)
+                        )
                     }
                 }
 
@@ -410,6 +534,41 @@ fun DisciplineScreen(
                             Text("Action Plan: ${rev.nextActionPlan}", style = MaterialTheme.typography.bodySmall, color = ext.profit)
                         }
                     }
+                }
+            }
+        }
+
+        if (weeklyReports.isNotEmpty()) {
+            item {
+                Text(
+                    text = "Saved Weekly Reports (${weeklyReports.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()
+                )
+            }
+            items(weeklyReports, key = { "wrep_${it.id}" }) { rep ->
+                Column(modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()) {
+                    WeeklyPerformanceReportCard(
+                        report = rep,
+                        isLiveCurrentWeek = false,
+                        expandedByDefault = false,
+                        onMarkRead = { onMarkWeeklyReportRead(rep) }
+                    )
+                }
+            }
+        }
+
+        if (smartAlerts.isNotEmpty()) {
+            item {
+                Text(
+                    text = "Smart Discipline Warning History (${smartAlerts.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()
+                )
+            }
+            items(smartAlerts, key = { "salert_${it.id}" }) { alert ->
+                Column(modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()) {
+                    SmartAlertHistoryItem(alert = alert)
                 }
             }
         }

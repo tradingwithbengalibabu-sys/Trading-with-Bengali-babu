@@ -64,9 +64,16 @@ import com.example.data.model.AccountStatus
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
 import com.example.data.model.TradeResult
+import com.example.data.model.TradingCurrency
 import com.example.data.model.UserRole
+import com.example.domain.TradeDateTimeHelper
 import com.example.domain.TradingAnalytics
 import com.example.ui.theme.LocalTradingColors
+import androidx.compose.material.icons.rounded.CurrencyExchange
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import coil.compose.SubcomposeAsyncImage
 import java.util.Locale
 
 @Composable
@@ -102,6 +109,133 @@ fun BrandLogoBadge(
                 .padding(2.dp)
                 .clip(CircleShape),
             contentScale = ContentScale.Crop
+        )
+    }
+}
+
+@Composable
+fun StudentAvatar(
+    photoUrl: String,
+    name: String,
+    size: Dp = 48.dp,
+    borderColor: Color? = null,
+    isLoading: Boolean = false,
+    showErrorIndicator: Boolean = false,
+    onLoadError: ((String?) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val ext = LocalTradingColors.current
+    val resolvedBorder = borderColor ?: ext.electricBlue
+    val initials = remember(name) {
+        val parts = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        when {
+            parts.size >= 2 -> "${parts[0].first().uppercaseChar()}${parts[1].first().uppercaseChar()}"
+            parts.size == 1 -> parts[0].take(2).uppercase(Locale.US)
+            else -> ""
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        ext.electricBlue.copy(alpha = 0.22f),
+                        ext.purple.copy(alpha = 0.22f)
+                    )
+                )
+            )
+            .border(1.5.dp, resolvedBorder, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (photoUrl.isNotBlank()) {
+            ResilientFirebaseImage(
+                model = photoUrl,
+                contentDescription = "Profile photo of ${name.ifBlank { "Student" }}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+                onLoadError = onLoadError,
+                loadingContent = {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size((size.value * 0.42f).dp),
+                            strokeWidth = 2.dp,
+                            color = resolvedBorder
+                        )
+                    }
+                },
+                errorContent = { _, _ ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        StudentAvatarFallback(initials = initials, size = size, tint = resolvedBorder)
+                        if (showErrorIndicator && size >= 64.dp) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .background(ext.loss.copy(alpha = 0.85f))
+                                    .padding(vertical = 2.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Retry",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            )
+        } else {
+            StudentAvatarFallback(initials = initials, size = size, tint = resolvedBorder)
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.48f)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size((size.value * 0.42f).dp),
+                    strokeWidth = 2.5.dp,
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudentAvatarFallback(
+    initials: String,
+    size: Dp,
+    tint: Color
+) {
+    if (initials.isNotBlank()) {
+        Text(
+            text = initials,
+            style = when {
+                size >= 80.dp -> MaterialTheme.typography.headlineSmall
+                size >= 48.dp -> MaterialTheme.typography.titleMedium
+                else -> MaterialTheme.typography.labelMedium
+            }.copy(fontWeight = FontWeight.Bold),
+            color = tint,
+            maxLines = 1
+        )
+    } else {
+        Icon(
+            imageVector = Icons.Rounded.Person,
+            contentDescription = "Default student avatar",
+            tint = tint,
+            modifier = Modifier.size((size.value * 0.54f).dp)
         )
     }
 }
@@ -255,6 +389,123 @@ fun StatusBadge(status: AccountStatus) {
 }
 
 @Composable
+fun CurrencyBadge(currency: TradingCurrency, modifier: Modifier = Modifier) {
+    val ext = LocalTradingColors.current
+    val color = if (currency == TradingCurrency.INR) ext.gold else ext.teal
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.4f))
+    ) {
+        Text(
+            text = "${currency.code} ${currency.symbol}",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = color,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+@Composable
+fun DisplayCurrencySelectorBar(
+    selectedCurrency: TradingCurrency,
+    onSelectCurrency: (TradingCurrency) -> Unit,
+    liveUsdToInrRate: Double,
+    isRefreshingRate: Boolean = false,
+    onRefreshRate: (() -> Unit)? = null,
+    onHeroSurface: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val ext = LocalTradingColors.current
+    val containerBg = if (onHeroSurface) Color.White.copy(alpha = 0.10f) else ext.cardElevated.copy(alpha = 0.7f)
+    val borderCol = if (onHeroSurface) ext.gold.copy(alpha = 0.35f) else ext.cardBorder
+    val primaryText = if (onHeroSurface) Color.White else MaterialTheme.colorScheme.onSurface
+    val mutedText = if (onHeroSurface) Color.White.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = containerBg,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, borderCol)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CurrencyExchange,
+                    contentDescription = "Display currency",
+                    tint = ext.gold,
+                    modifier = Modifier.size(16.dp)
+                )
+                Column {
+                    Text(
+                        text = "Display: ${selectedCurrency.label}",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = primaryText
+                    )
+                    Text(
+                        text = "1 USD = ₹${String.format(Locale.US, "%.2f", liveUsdToInrRate)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = mutedText
+                    )
+                }
+                if (onRefreshRate != null) {
+                    IconButton(
+                        onClick = onRefreshRate,
+                        enabled = !isRefreshingRate,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        if (isRefreshingRate) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = ext.gold
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "Refresh live USD/INR rate",
+                                tint = ext.gold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TradingCurrency.entries.forEach { curr ->
+                    val active = selectedCurrency == curr
+                    Surface(
+                        color = if (active) ext.gold else Color.Transparent,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, if (active) ext.gold else borderCol),
+                        modifier = Modifier.clickable { onSelectCurrency(curr) }
+                    ) {
+                        Text(
+                            text = "${curr.symbol} ${curr.code}",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (active) Color(0xFF0A1628) else primaryText,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun GradientButton(
     text: String,
     onClick: () -> Unit,
@@ -378,19 +629,33 @@ fun EmptyTradingState(
 @Composable
 fun TradeDetailDialog(
     trade: TradeEntity,
+    displayCurrency: TradingCurrency = trade.currencyEnum,
     canEditOrDelete: Boolean,
+    timezoneId: String = trade.effectiveTimezoneId,
+    timeSincePrevTradeMillis: Long? = null,
     onDismiss: () -> Unit,
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onViewScreenshot: (String) -> Unit
 ) {
     val ext = LocalTradingColors.current
+    val origCurr = trade.currencyEnum
+    val displayedNetOrig = if (trade.isClosedTrade) trade.netRealizedPnl else trade.actualPnl
     val pnlColor = when {
-        trade.actualPnl > 0 -> ext.profit
-        trade.actualPnl < 0 -> ext.loss
+        !trade.isClosedTrade -> ext.electricBlue
+        displayedNetOrig > 0 -> ext.profit
+        displayedNetOrig < 0 -> ext.loss
         else -> ext.gold
     }
+    val convertedPnl = TradingAnalytics.convertedPnl(trade, displayCurrency)
+    val convertedRisk = TradingAnalytics.convertedRisk(trade, displayCurrency)
     val decodedBitmap = rememberDecodedScreenshot(trade.screenshotData)
+    val weekdayLabel = TradeDateTimeHelper.weekdayOf(
+        entryTimeMillis = trade.entryTimeMillis,
+        tradeDateMillis = trade.tradeDateMillis,
+        tradeDateIso = trade.tradeDateIso,
+        timezoneId = timezoneId
+    )?.label ?: ""
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -422,7 +687,7 @@ fun TradeDetailDialog(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "${trade.tradeDateIso} • ${trade.userName}",
+                            text = "${trade.tradeDateIso}${if (weekdayLabel.isNotBlank()) " ($weekdayLabel)" else ""} • ${trade.userName}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -434,7 +699,19 @@ fun TradeDetailDialog(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     DirectionBadge(trade.directionEnum)
-                    ResultBadge(trade.resultEnum)
+                    if (trade.isClosedTrade) {
+                        ResultBadge(trade.resultEnum)
+                    } else {
+                        Surface(color = ext.goldContainer, shape = RoundedCornerShape(6.dp)) {
+                            Text(
+                                text = "OPEN",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = ext.gold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    CurrencyBadge(origCurr)
                     Surface(
                         color = ext.purple.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(6.dp)
@@ -454,32 +731,94 @@ fun TradeDetailDialog(
                     border = BorderStroke(1.dp, pnlColor.copy(alpha = 0.3f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column {
-                            Text("Actual Profit / Loss", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                text = TradingAnalytics.formatCurrency(trade.actualPnl),
-                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                                color = pnlColor
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = if (trade.isClosedTrade) "Net Realized P&L (${origCurr.code})" else "Open Unrealized P&L (${origCurr.code})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = TradingAnalytics.formatCurrency(displayedNetOrig, origCurr),
+                                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = pnlColor
+                                )
+                                if (trade.fees > 0.0) {
+                                    Text(
+                                        text = "Gross ${TradingAnalytics.formatCurrency(trade.actualPnl, origCurr)} • Fees ${TradingAnalytics.formatPlainCurrency(trade.fees, origCurr)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    "Risk / Lot (${origCurr.code})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${TradingAnalytics.formatPlainCurrency(trade.riskAmount, origCurr)} • ${trade.lotSize} lot",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Risk / Lot", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                        HorizontalDivider(color = pnlColor.copy(alpha = 0.2f))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = "${TradingAnalytics.formatPlainCurrency(trade.riskAmount)} • ${trade.lotSize} lot",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
+                                text = "Saved Rate: 1 USD = ₹${String.format(Locale.US, "%.2f", trade.effectiveUsdToInrRate)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ext.gold
                             )
+                            if (origCurr != displayCurrency && trade.isClosedTrade) {
+                                Text(
+                                    text = "In ${displayCurrency.code}: ${TradingAnalytics.formatCurrency(convertedPnl, displayCurrency)} (Risk ${TradingAnalytics.formatPlainCurrency(convertedRisk, displayCurrency)})",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
 
                 HorizontalDivider(color = ext.cardBorder)
 
+                val entryDisplay = trade.entryTimeMillis?.takeIf { it > 0L }?.let {
+                    "${TradeDateTimeHelper.formatDateTimeDisplay(it, timezoneId)} (${TradeDateTimeHelper.shortTimezoneTag(timezoneId)})"
+                } ?: "${trade.tradeDateIso} • Time not recorded"
+                val exitDisplay = trade.exitTimeMillis?.takeIf { it > 0L }?.let {
+                    "${TradeDateTimeHelper.formatDateTimeDisplay(it, timezoneId)} (${TradeDateTimeHelper.shortTimezoneTag(timezoneId)})"
+                } ?: "Time not recorded"
+                val durationDisplay = trade.holdingDurationMillis?.let {
+                    TradeDateTimeHelper.formatDuration(it)
+                } ?: "Not recorded"
+                val gapDisplay = timeSincePrevTradeMillis?.let {
+                    TradeDateTimeHelper.formatDuration(it)
+                } ?: "N/A"
+
+                DetailGridRow("Entry Date & Time", entryDisplay, "Exit Date & Time", exitDisplay)
+                DetailGridRow("Holding Duration", durationDisplay, "Time Since Prev Trade", gapDisplay)
+                DetailGridRow(
+                    "Trading Session",
+                    trade.tradingSession.ifBlank { "Unassigned" },
+                    "Closure Mode",
+                    trade.resolvedExitClosureType.label
+                )
                 DetailGridRow("Entry Price", trade.entryPrice.toString(), "Exit Price", trade.exitPrice.toString())
                 DetailGridRow(
                     "Stop Loss",

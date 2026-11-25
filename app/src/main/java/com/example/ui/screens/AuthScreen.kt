@@ -302,7 +302,7 @@ fun AuthScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Students access their private 21-field trading journal, KPIs, and discipline analytics.",
+                                text = "Students access their private 21-field trading journal, personal student profile & photo, KPIs, and discipline analytics.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

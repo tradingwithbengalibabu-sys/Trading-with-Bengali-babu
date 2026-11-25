@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+             'email_verified' in request.auth.token &&
+             request.auth.token.email_verified == true &&
+             'email' in request.auth.token &&
+             request.auth.token.email == 'tradingwithbengalibabu@gmail.com';
+    }
+
+    match /student_profiles/{userId}/{allPaths=**} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isBootstrappedAdmin());
+
+      allow create, update: if isSignedIn() &&
+                               (request.auth.uid == userId || isBootstrappedAdmin()) &&
+                               request.resource != null &&
+                               request.resource.size <= 5 * 1024 * 1024 &&
+                               request.resource.contentType.matches('image/.*');
+
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isBootstrappedAdmin());
+    }
+
+    match /trade_signals/{signalId}/screenshots/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isBootstrappedAdmin() &&
+                               request.resource != null &&
+                               request.resource.size <= 8 * 1024 * 1024 &&
+                               request.resource.contentType.matches('image/.*');
+      allow delete: if isBootstrappedAdmin();
+    }
+
+    match /trade_signals/{signalId}/voice/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isBootstrappedAdmin() &&
+                               request.resource != null &&
+                               request.resource.size <= 15 * 1024 * 1024 &&
+                               request.resource.contentType.matches('audio/.*');
+      allow delete: if isBootstrappedAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

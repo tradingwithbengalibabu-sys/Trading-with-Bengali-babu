@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Image
@@ -33,6 +34,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -48,46 +50,71 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.local.CustomTradingSession
 import com.example.data.model.Timeframe
 import com.example.data.model.TradeDirection
 import com.example.data.model.TradeEntity
 import com.example.data.model.TradeResult
+import com.example.data.model.TradingCurrency
+import com.example.domain.AdvancedTradeAnalytics
+import com.example.domain.TradeDateTimeHelper
 import com.example.domain.TradingAnalytics
+import com.example.ui.components.CurrencyBadge
 import com.example.ui.components.DirectionBadge
 import com.example.ui.components.EmptyTradingState
 import com.example.ui.components.ResultBadge
 import com.example.ui.components.ScreenshotLightboxDialog
 import com.example.ui.components.TradeDetailDialog
 import com.example.ui.theme.LocalTradingColors
+import java.util.Locale
 
 @Composable
 fun JournalScreen(
     trades: List<TradeEntity>,
+    displayCurrency: TradingCurrency,
+    timezoneId: String = TradeDateTimeHelper.DEFAULT_TIMEZONE_ID,
+    customSessions: List<CustomTradingSession> = CustomTradingSession.DEFAULT_SESSIONS,
     onAddTrade: () -> Unit,
     onEditTrade: (TradeEntity) -> Unit,
     onDeleteTrade: (String) -> Unit,
+    onOpenCalendarAnalytics: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val ext = LocalTradingColors.current
     var searchQuery by remember { mutableStateOf("") }
+    var selectedCurrencyFilter by remember { mutableStateOf<TradingCurrency?>(null) }
     var selectedResult by remember { mutableStateOf<TradeResult?>(null) }
     var selectedDirection by remember { mutableStateOf<TradeDirection?>(null) }
     var selectedTimeframe by remember { mutableStateOf<Timeframe?>(null) }
     var inspectedTrade by remember { mutableStateOf<TradeEntity?>(null) }
     var previewScreenshotData by remember { mutableStateOf<String?>(null) }
 
-    val filtered = remember(trades, searchQuery, selectedResult, selectedDirection, selectedTimeframe) {
+    val gapByTradeId = remember(trades, displayCurrency, timezoneId, customSessions) {
+        AdvancedTradeAnalytics.enrichTrades(trades, displayCurrency, timezoneId, customSessions)
+            .associate { it.trade.id to it.timeSincePrevTradeMillis }
+    }
+
+    val filtered = remember(
+        trades,
+        searchQuery,
+        selectedCurrencyFilter,
+        selectedResult,
+        selectedDirection,
+        selectedTimeframe
+    ) {
         trades.filter { t ->
             val q = searchQuery.trim()
             val matchesSearch = q.isEmpty() ||
                 t.instrument.contains(q, ignoreCase = true) ||
                 t.tradeCode.contains(q, ignoreCase = true) ||
                 t.strategy.contains(q, ignoreCase = true) ||
-                t.notes.contains(q, ignoreCase = true)
+                t.notes.contains(q, ignoreCase = true) ||
+                t.currencyEnum.code.contains(q, ignoreCase = true)
+            val matchesCurr = selectedCurrencyFilter == null || t.currencyEnum == selectedCurrencyFilter
             val matchesResult = selectedResult == null || t.resultEnum == selectedResult
             val matchesDir = selectedDirection == null || t.directionEnum == selectedDirection
             val matchesTf = selectedTimeframe == null || t.timeframeEnum == selectedTimeframe
-            matchesSearch && matchesResult && matchesDir && matchesTf
+            matchesSearch && matchesCurr && matchesResult && matchesDir && matchesTf
         }
     }
 
@@ -121,7 +148,7 @@ fun JournalScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search instrument, TWBB ID, strategy, notes...") },
+                        placeholder = { Text("Search instrument, TWBB ID, currency (INR/USD), strategy...") },
                         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
@@ -148,6 +175,13 @@ fun JournalScreen(
                             tint = ext.electricBlue,
                             modifier = Modifier.size(18.dp)
                         )
+                        TradingCurrency.entries.forEach { curr ->
+                            FilterChip(
+                                selected = selectedCurrencyFilter == curr,
+                                onClick = { selectedCurrencyFilter = if (selectedCurrencyFilter == curr) null else curr },
+                                label = { Text(curr.label) }
+                            )
+                        }
                         TradeResult.entries.forEach { res ->
                             FilterChip(
                                 selected = selectedResult == res,
@@ -171,11 +205,30 @@ fun JournalScreen(
                         }
                     }
 
-                    Text(
-                        text = "Showing ${filtered.size} of ${trades.size} trades",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Showing ${filtered.size} of ${trades.size} trades • ${displayCurrency.code}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (onOpenCalendarAnalytics != null) {
+                            OutlinedButton(
+                                onClick = onOpenCalendarAnalytics,
+                                border = BorderStroke(1.dp, ext.gold.copy(alpha = 0.55f)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(40.dp).testTag("journal_open_calendar_analytics")
+                            ) {
+                                Icon(Icons.Rounded.CalendarMonth, contentDescription = null, tint = ext.gold, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text("Calendar & Insights", style = MaterialTheme.typography.labelMedium, color = ext.gold)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -184,7 +237,7 @@ fun JournalScreen(
                     Box(modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()) {
                         EmptyTradingState(
                             title = if (trades.isEmpty()) "Your Trading Journal is Empty" else "No Matching Trades",
-                            subtitle = if (trades.isEmpty()) "Tap + to record your entry, exit, SL/TP, mistakes, lessons, and chart screenshot." else "Try adjusting your search or filter chips.",
+                            subtitle = if (trades.isEmpty()) "Tap + to record your entry, exit, currency (INR/USD), SL/TP, mistakes, and chart screenshot." else "Try adjusting your search or filter chips.",
                             actionLabel = if (trades.isEmpty()) "Add Trade" else null,
                             onAction = if (trades.isEmpty()) onAddTrade else null
                         )
@@ -195,6 +248,9 @@ fun JournalScreen(
                     Box(modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth()) {
                         TradeCardItem(
                             trade = trade,
+                            displayCurrency = displayCurrency,
+                            timezoneId = timezoneId,
+                            timeSincePrevTradeMillis = gapByTradeId[trade.id],
                             onClick = { inspectedTrade = trade }
                         )
                     }
@@ -208,7 +264,10 @@ fun JournalScreen(
     inspectedTrade?.let { trade ->
         TradeDetailDialog(
             trade = trade,
+            displayCurrency = displayCurrency,
             canEditOrDelete = true,
+            timezoneId = timezoneId,
+            timeSincePrevTradeMillis = gapByTradeId[trade.id],
             onDismiss = { inspectedTrade = null },
             onEdit = {
                 inspectedTrade = null
@@ -230,13 +289,19 @@ fun JournalScreen(
 @Composable
 fun TradeCardItem(
     trade: TradeEntity,
+    displayCurrency: TradingCurrency = trade.currencyEnum,
+    timezoneId: String = TradeDateTimeHelper.DEFAULT_TIMEZONE_ID,
+    timeSincePrevTradeMillis: Long? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val ext = LocalTradingColors.current
+    val origCurr = trade.currencyEnum
+    val displayedOrigPnl = if (trade.isClosedTrade) trade.netRealizedPnl else trade.actualPnl
     val pnlColor = when {
-        trade.actualPnl > 0 -> ext.profit
-        trade.actualPnl < 0 -> ext.loss
+        !trade.isClosedTrade -> ext.electricBlue
+        displayedOrigPnl > 0 -> ext.profit
+        displayedOrigPnl < 0 -> ext.loss
         else -> ext.gold
     }
 
@@ -261,7 +326,8 @@ fun TradeCardItem(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = trade.instrument,
@@ -269,6 +335,7 @@ fun TradeCardItem(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     DirectionBadge(trade.directionEnum)
+                    CurrencyBadge(origCurr)
                     Surface(
                         color = ext.electricBlue.copy(alpha = 0.12f),
                         shape = RoundedCornerShape(6.dp)
@@ -280,13 +347,56 @@ fun TradeCardItem(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
+                    if (!trade.isClosedTrade) {
+                        Surface(
+                            color = ext.goldContainer,
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "OPEN",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = ext.gold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
-                Text(
-                    text = TradingAnalytics.formatCurrency(trade.actualPnl),
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = pnlColor
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = TradingAnalytics.formatCurrency(displayedOrigPnl, origCurr),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = pnlColor
+                    )
+                    if (trade.fees > 0.0) {
+                        Text(
+                            text = "Fees ${TradingAnalytics.formatPlainCurrency(trade.fees, origCurr)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (origCurr != displayCurrency && trade.isClosedTrade) {
+                        val conv = TradingAnalytics.convertedPnl(trade, displayCurrency)
+                        Text(
+                            text = "≈ ${TradingAnalytics.formatCurrency(conv, displayCurrency)} @ ₹${String.format(Locale.US, "%.2f", trade.effectiveUsdToInrRate)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
+
+            val weekdayShort = TradeDateTimeHelper.weekdayOf(
+                trade.entryTimeMillis, trade.tradeDateMillis, trade.tradeDateIso, timezoneId
+            )?.shortLabel
+            val timeRangeLabel = when {
+                trade.hasExactEntryTime && trade.hasExactExitTime ->
+                    "${TradeDateTimeHelper.formatTime12h(trade.entryTimeMillis!!, timezoneId)} → ${TradeDateTimeHelper.formatTime12h(trade.exitTimeMillis!!, timezoneId)}"
+                trade.hasExactEntryTime ->
+                    "In ${TradeDateTimeHelper.formatTime12h(trade.entryTimeMillis!!, timezoneId)}"
+                else -> null
+            }
+            val durationStr = trade.holdingDurationMillis?.let { TradeDateTimeHelper.formatDuration(it) }
+            val sessionStr = trade.tradingSession.takeIf { it.isNotBlank() }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -294,11 +404,36 @@ fun TradeCardItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${trade.tradeCode} • ${trade.tradeDateIso} • Lot ${trade.lotSize}",
+                    text = "${trade.tradeCode} • ${trade.tradeDateIso}${if (weekdayShort != null) " ($weekdayShort)" else ""} • Lot ${trade.lotSize}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ResultBadge(trade.resultEnum)
+                if (trade.isClosedTrade) {
+                    ResultBadge(trade.resultEnum)
+                } else {
+                    Surface(color = ext.goldContainer, shape = RoundedCornerShape(999.dp)) {
+                        Text(
+                            text = "Open Position",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = ext.gold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            if (timeRangeLabel != null || durationStr != null || sessionStr != null || timeSincePrevTradeMillis != null) {
+                val timingParts = buildList {
+                    if (timeRangeLabel != null) add(timeRangeLabel)
+                    if (durationStr != null) add("Hold $durationStr")
+                    if (sessionStr != null) add(sessionStr)
+                    if (timeSincePrevTradeMillis != null) add("Gap ${TradeDateTimeHelper.formatDuration(timeSincePrevTradeMillis)}")
+                }.joinToString(" • ")
+                Text(
+                    text = timingParts,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ext.electricBlue
+                )
             }
 
             Row(
